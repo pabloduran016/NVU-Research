@@ -2,7 +2,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
 import sys
 import os
-from typing import Any, Dict, Literal, Union, List, Optional, Tuple
+from typing import Any, Dict, Literal, Union, List, Optional, Tuple, Callable
 import numpy as np
 import numpy.typing as npt
 import rumdpy as rp
@@ -24,21 +24,30 @@ __all__ = [
 
 
 def run_NVTorNVE(params: "SimulationParameters") -> None:
-    conf = rp.Configuration(D=3)
-    conf.make_lattice(rp.unit_cells.FCC, cells=params.cells, rho=params.rho)
-    conf["m"] = 1.0
-    if params.pair_potential_name == "Kob-Andersen":
-        conf.ptype[::5] = 1     # Every fifth particle set to type 1 (4:1 mixture)
-    conf.randomize_velocities(T=params.temperature)
+    temp_eq = params.temperature_eq if params.temperature_eq is not None else params.temperature
+    if params.initial_conf is None:
+        conf = rp.Configuration(D=3)
+        conf.make_lattice(rp.unit_cells.FCC, cells=params.cells, rho=params.rho)
+        conf["m"] = 1.0
+        if params.pair_potential_name == "Kob-Andersen":
+            conf.ptype[::5] = 1     # Every fifth particle set to type 1 (4:1 mixture)
+        if callable(temp_eq):
+            temp0 = temp_eq(0)
+        else:
+            temp0 = temp_eq
+        conf.randomize_velocities(T=temp0)
+    else:
+        conf, _  = load_conf_from_npz(params.initial_conf)
         
     if type(params) == SimulationVsNVT:
         kind = "NVT"
-        integrator = rp.integrators.NVT(temperature=params.temperature, tau=params.tau, dt=params.dt)
+        integrator_eq = rp.integrators.NVT(temperature=temp_eq, tau=params.tau, dt=params.dt)
+        integrator_prod = rp.integrators.NVT(temperature=params.temperature, tau=params.tau, dt=params.dt)
         prod_output = params.nvt_output
         conf_output = params.nvt_conf_output
     elif type(params) == SimulationVsNVE:
         kind = "NVE"
-        integrator = rp.integrators.NVE(dt=params.dt)
+        integrator_eq = integrator_prod = rp.integrators.NVE(dt=params.dt)
         prod_output = params.nve_output
         conf_output = params.nve_conf_output
     else:
@@ -46,7 +55,7 @@ def run_NVTorNVE(params: "SimulationParameters") -> None:
 
     print(f"========== {kind} EQ ==========")
     sim = rp.Simulation(
-        conf, params.pair_potential, integrator,
+        conf, params.pair_potential, integrator_eq,
         num_timeblocks=params.num_timeblocks, steps_per_timeblock=params.steps_per_timeblock,
         storage="memory",
         conf_output="none",
@@ -55,7 +64,7 @@ def run_NVTorNVE(params: "SimulationParameters") -> None:
     sim.run(verbose=True)
     print(f"========== {kind} PROD ==========")
     sim = rp.Simulation(
-        conf, params.pair_potential, integrator,
+        conf, params.pair_potential, integrator_prod,
         num_timeblocks=params.num_timeblocks, 
         steps_per_timeblock=params.steps_per_timeblock,
         scalar_output=params.scalar_output,
@@ -70,7 +79,7 @@ def run_NVTorNVE(params: "SimulationParameters") -> None:
     target_u = np.mean(u[len(u)*3//4:])
 
     sim = rp.Simulation(
-        conf, params.pair_potential, integrator,
+        conf, params.pair_potential, integrator_prod,
         num_timeblocks=params.num_timeblocks, steps_per_timeblock=params.steps_per_timeblock,
         storage="memory",
         conf_output="none",
@@ -104,7 +113,7 @@ def run_NVU_RT(params: "SimulationParameters", do_nvu_eq: bool) -> None:
 
     # target_u = np.mean(u)
     other_prod_output = rp.tools.load_output(prod_output)
-    conf, target_u = load_conf_from_npz(conf_output, other_prod_output["attrs"]["simbox_initial"])
+    conf, target_u = load_conf_from_npz(conf_output)
     integrator = rp.integrators.NVU_RT(
         target_u=target_u,
         max_abs_val=params.nvu_params_max_abs_val,
@@ -136,7 +145,7 @@ def run_NVU_RT(params: "SimulationParameters", do_nvu_eq: bool) -> None:
         print(sim.summary())
         save_conf_to_npz(params.nvu_eq_conf_output, conf, target_u)
     else:
-        conf, _target_u = load_conf_from_npz(params.nvu_eq_conf_output, other_prod_output["attrs"]["simbox_initial"])
+        conf, _target_u = load_conf_from_npz(params.nvu_eq_conf_output)
 
     print("========== NVU PROD ==========")
     sim = rp.Simulation(
@@ -153,10 +162,10 @@ def run_NVU_RT(params: "SimulationParameters", do_nvu_eq: bool) -> None:
 
 
 def save_conf_to_npz(path: str, conf: rp.Configuration, target_u: float) -> None:
-    np.savez(path, r=conf["r"], v=conf["v"], ptype=conf.ptype, target_u=target_u)
+    np.savez(path, r=conf["r"], v=conf["v"], ptype=conf.ptype, target_u=target_u, simbox_initial=conf.simbox.lengths)
 
 
-def load_conf_from_npz(path: str, simbox_initial: list[float]) -> Tuple[rp.Configuration, float]:
+def load_conf_from_npz(path: str) -> Tuple[rp.Configuration, float]:
     conf_data = np.load(path)
     n, d = conf_data["r"].shape
     conf = rp.Configuration(N=n, D=d)
@@ -164,7 +173,7 @@ def load_conf_from_npz(path: str, simbox_initial: list[float]) -> Tuple[rp.Confi
     conf["m"] = 1.0
     conf["v"] = conf_data["v"]
     conf.ptype = conf_data["ptype"]
-    conf.simbox = rp.Simbox(D=d, lengths=simbox_initial)
+    conf.simbox = rp.Simbox(D=d, lengths=conf_data["simbox_initial"])
     return conf, float(conf_data["target_u"])
 
 
@@ -180,7 +189,9 @@ class SimulationParameters:
     steps: int
     steps_per_timeblock: int
     scalar_output: int
-    temperature: float
+    temperature: float | Callable[[float], float]
+    temperature_eq: Optional[float | Callable[[float], float]] = None
+    initial_conf: Optional[str] = None
 
     cells: List[int]
 
@@ -194,7 +205,7 @@ class SimulationParameters:
     nvu_params_max_initial_step_corrections: int
     nvu_params_initial_step: float
     nvu_params_initial_step_if_high: float
-    nvu_params_step: Optional[float] = None
+    nvu_params_step: float
     nvu_params_mode: Literal["reflection", "no-inertia"] = "reflection"
     nvu_params_save_path_u: bool = False
     nvu_params_root_method: Literal["parabola", "bisection"] = "bisection"
@@ -203,6 +214,8 @@ class SimulationParameters:
     nvu_eq_output = property(lambda self: os.path.join(self.folder, "nvu-rt_eq.h5"))
     nvu_output = property(lambda self: os.path.join(self.folder, "nvu-rt_prod.h5"))
     output_figs = property(lambda self: os.path.join(self.folder, "figures.pdf"))
+    nvu_prod_rdf = property(lambda self: os.path.join(self.folder, "nvu-prod_rdf.npz"))
+    other_prod_rdf = property(lambda self: os.path.join(self.folder, "other-prod_rdf.npz"))
     info_output = property(lambda self: os.path.join(self.folder, "info.txt"))
     folder = property(lambda self: os.path.join(self.root_folder, self.name))
 
@@ -282,11 +295,8 @@ class SimulationVsNVT(SimulationParameters):
     tau: float
     dt: float
 
-    def __post_init__(self) -> None:
-        super().__post_init__()
-
-        self.nvt_output = os.path.join(self.folder, "nvt_prod.h5")
-        self.nvt_conf_output = os.path.join(self.folder, "nvt.npz")
+    nvt_output = property(lambda self: os.path.join(self.folder, "nvt_prod.h5"))
+    nvt_conf_output = property(lambda self: os.path.join(self.folder, "nvt.npz"))
 
     def info(self) -> str:
         info = "NVU vs NVT\n"
@@ -305,11 +315,8 @@ class SimulationVsNVT(SimulationParameters):
 class SimulationVsNVE(SimulationParameters):
     dt: float
 
-    def __post_init__(self) -> None:
-        super().__post_init__()
-
-        self.nve_output = os.path.join(self.folder, "nve_prod.h5")
-        self.nve_conf_output = os.path.join(self.folder, "nve.npz")
+    nve_output = property(lambda self: os.path.join(self.folder, "nve_prod.h5"))
+    nve_conf_output = property(lambda self: os.path.join(self.folder, "nve.npz"))
 
     def info(self) -> str:
         info = "NVU vs NVE\n"
@@ -337,8 +344,8 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
 
     _, _, _, n, d = other_prod_output["block"].shape
 
-    other_u, = rp.extract_scalars(other_prod_output, ["U"], first_block=0, D=d)
-    _conf, target_u = load_conf_from_npz(params.nvu_eq_conf_output, other_prod_output["attrs"]["simbox_initial"])
+    other_u, other_k, = rp.extract_scalars(other_prod_output, ["U", "K"], first_block=0, D=d)
+    _conf, target_u = load_conf_from_npz(params.nvu_eq_conf_output)
     other_du_rel = (other_u - target_u) / abs(target_u)
 
     fig = plt.figure(figsize=(10, 8))
@@ -355,6 +362,14 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax0.set_xlabel(r"$U$")
     ax1.axvline(target_u)
     ax1.grid()
+
+    fig = plt.figure(figsize=(10, 8))
+    fig.suptitle(f"{kind} Temperature")
+    ax = fig.add_subplot()
+    dof = d * n - d  # degrees of freedom
+    temp = 2 * other_k / dof
+    ax.plot(prod_step, temp, linewidth=1, alpha=.8, color="black")
+    ax.grid()
 
     if not os.path.exists(params.nvu_output):
         print("WARNING: NVU PROD output not found", file=sys.stderr)
@@ -384,6 +399,8 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     nvu_prod_u, prod_dt, prod_its, prod_fsq, prod_lap, prod_cos_v_f, prod_time = \
         rp.extract_scalars(nvu_prod_output, ["U", "dt", "its", "Fsq", "lapU", "cos_v_f", "time", ], 
                            integrator_outputs=rp.integrators.NVU_RT.outputs)
+    prod_cos_v_f[prod_cos_v_f > 1] = 1
+    prod_cos_v_f[prod_cos_v_f < -1] = -1
 
     prod_dt = prod_dt * (np.pi / 2 - np.arccos(prod_cos_v_f)) / prod_cos_v_f
     fig = plt.figure(figsize=(10, 8))
@@ -476,7 +493,6 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax1.grid()
     
     fig = plt.figure(figsize=(10, 8))
-    prod_cos_v_f = - prod_cos_v_f  # We are interested in the angle between the reflected ray
     mean_vf, std_vf = np.mean(prod_cos_v_f), np.std(prod_cos_v_f)
     fig.suptitle(rf"$cos(v,\,f)$. $\mu={mean_vf:.03f}$; $\sigma={std_vf:.05f}={std_vf/mean_vf*100:.02f}\%$")
     ax0 = fig.add_subplot(2, 1, 1)
@@ -558,6 +574,8 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     nvu_eq_u, eq_dt, eq_its, eq_fsq, eq_lap, eq_cos_v_f, eq_time = \
         rp.extract_scalars(nvu_eq_output, ["U", "dt", "its", "Fsq", "lapU", "cos_v_f", "time", ], 
                            integrator_outputs=rp.integrators.NVU_RT.outputs, first_block=1)
+    eq_cos_v_f[eq_cos_v_f > 1] = 1
+    eq_cos_v_f[eq_cos_v_f < 1] = -1
     eq_step = np.arange(len(nvu_eq_u)) * nvu_eq_output["steps_between_output"]
 
     nvu_eq_du_rel = (nvu_eq_u - target_u) / abs(target_u)
@@ -615,7 +633,6 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax1.grid()
     
     fig = plt.figure(figsize=(10, 8))
-    eq_cos_v_f = - eq_cos_v_f  # We are interested in the angle between the reflected ray
     mean_vf, std_vf = np.mean(eq_cos_v_f), np.std(eq_cos_v_f)
     fig.suptitle(rf"NVU EQ. $cos(v,\,f)$. $\mu={mean_vf:.03f}$; $\sigma={std_vf:.05f}={std_vf/mean_vf*100:.02f}\%$")
     ax0 = fig.add_subplot(2, 1, 1)

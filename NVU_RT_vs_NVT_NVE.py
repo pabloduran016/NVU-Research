@@ -664,6 +664,7 @@ and the curvature of Omega or the configuration temperature.""",
     nvu_params_initial_step_if_high=1e-3,
     nvu_params_step=1,
     nvu_params_save_path_u=True,
+    nvu_params_root_method="parabola",
 )
 
 if __name__ == "__main__":
