@@ -378,38 +378,13 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     nvu_prod_output = rp.tools.load_output(params.nvu_output)
     nvu_eq_output = rp.tools.load_output(params.nvu_eq_output)
 
-    nblocks, nsaved_per_block, npoints, n = nvu_prod_output["path_u"].shape
-    path_u = nvu_prod_output["path_u"].reshape(nblocks*nsaved_per_block, npoints, n)
-    xs = path_u[:, :, 0].T  # (npoints, npaths)
-    ys = path_u[:, :, 1].T  # (npoints, npaths)
-    # Harmonic approximation:
-    u = np.arange(npoints)/(n - 1) - 0.5
-    p = np.polyfit(u, ys, 2)
-    y_pred = p[0, :] * u[:, np.newaxis]**2 + p[1, :] * u[:, np.newaxis] + p[2, :]
-    fig = plt.figure(figsize=(10, 8))
-    r2 = 1 - np.sum((y_pred - ys)**2) / np.sum((y_pred - y_pred.mean(axis=0))**2)
-    fig.suptitle(rf"$R^2 = {r2}$ when aproximating $U(\lambda)$ to a parabola")
-    ax = fig.add_subplot()
-    rsd = ((y_pred - ys)**2 / (ys - ys.mean(axis=0))**2).flatten()
-    ax.hist(rsd[(~np.isnan(rsd)) & (np.abs(rsd) < float("inf"))], bins=30, color="black", alpha=0.5)
-    # ax.plot(rsd, marker='.', markeredgewidth=0, linewidth=0, markersize=5,
-    #         color="black", alpha=0.5)
-    # ax.hist((y_pred/ys).flatten(), bins=20, color="black", alpha=0.5)
-
-    nvu_prod_u, prod_dt, prod_its, prod_fsq, prod_lap, prod_cos_v_f, prod_time = \
-        rp.extract_scalars(nvu_prod_output, ["U", "dt", "its", "Fsq", "lapU", "cos_v_f", "time", ], 
+    nvu_prod_u, prod_dt, prod_its, prod_fsq, prod_lap, prod_cos_v_f, prod_time, prod_parabola_a, prod_initial_step, prod_initial_step_corrections = \
+        rp.extract_scalars(nvu_prod_output, ["U", "dt", "its", "Fsq", "lapU", "cos_v_f", "time", "parabola_a", "initial_step", "initial_step_corrections"], 
                            integrator_outputs=rp.integrators.NVU_RT.outputs)
     prod_cos_v_f[prod_cos_v_f > 1] = 1
     prod_cos_v_f[prod_cos_v_f < -1] = -1
-
-    correction = np.pi / 2 - np.arccos(prod_cos_v_f)
-    prod_dt = prod_dt * correction / prod_cos_v_f
-    fig = plt.figure(figsize=(10, 8))
-    fig.suptitle(r"Correction to delta time so that $\Delta t' = \Delta t \cdot \frac{\alpha}{\cos \theta}$. $\alpha$ comp. of $\theta$")
-    ax0 = fig.add_subplot(2, 1, 1)
-    ax0.plot(correction, color="black", alpha=.5)
-    ax1 = fig.add_subplot(2, 1, 2)
-    ax1.hist(correction[~np.isnan(correction)], color="black", alpha=.5)
+    prod_correction = (np.pi / 2 - np.arccos(prod_cos_v_f)) / prod_cos_v_f
+    prod_dt = prod_dt * prod_correction
 
     nvu_prod_du_rel = (nvu_prod_u - target_u) / abs(target_u)
     fig = plt.figure(figsize=(10, 10))
@@ -481,6 +456,14 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax1.set_xlabel(r"$\Delta t$")
 
     fig = plt.figure(figsize=(10, 8))
+    fig.suptitle(r"Correction to delta time so that $\Delta t' = \Delta t \cdot \frac{\alpha}{\cos \theta}$. $\alpha$ comp. of $\theta$")
+    ax0 = fig.add_subplot(2, 1, 1)
+    ax0.plot(prod_correction, color="black", alpha=.5)
+    ax1 = fig.add_subplot(2, 1, 2)
+    ax1.hist(prod_correction[~np.isnan(prod_correction)], color="black", alpha=.5)
+
+
+    fig = plt.figure(figsize=(10, 8))
     mean_its, std_its = np.mean(prod_its), np.std(prod_its)
     fig.suptitle(rf"Iterations. $\mu={mean_its:.01f}$; $\sigma={std_its:.02f}={std_its/mean_its*100:.02f}\%$")
     ax0 = fig.add_subplot(2, 1, 1)
@@ -492,6 +475,61 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax1.hist(prod_its, bins=20, color="black", alpha=.8)
     ax1.set_xlabel(r"iterations")
     ax1.grid()
+
+    fig = plt.figure(figsize=(10, 8))
+    mean_initial_step_corrections, std_initial_step_corrections = np.mean(prod_initial_step_corrections), np.std(prod_initial_step_corrections)
+    fig.suptitle(rf"initial_step_corrections. $\mu={mean_initial_step_corrections:.03f}$; $\sigma={std_initial_step_corrections:.03f}={std_initial_step_corrections/mean_initial_step_corrections*100:.02f}\%$")
+    ax0 = fig.add_subplot(2, 1, 1)
+    ax1 = fig.add_subplot(2, 1, 2)
+    ax0.plot(prod_step, prod_initial_step_corrections, linewidth=1, color="black", alpha=.8)
+    ax0.set_ylabel(r"initial_step_corrections")
+    ax0.set_xlabel(r"$step$")
+    ax0.grid()
+    ax1.hist(prod_initial_step_corrections[~np.isnan(prod_initial_step_corrections)], bins=20, color="black", alpha=.8)
+    ax1.set_xlabel(r"initial_step_corrections")
+
+    fig = plt.figure(figsize=(10, 8))
+    mean_initial_step, std_initial_step = np.mean(prod_initial_step), np.std(prod_initial_step)
+    fig.suptitle(rf"initial_step. $\mu={mean_initial_step:.03f}$; $\sigma={std_initial_step:.03f}={std_initial_step/mean_initial_step*100:.02f}\%$")
+    ax0 = fig.add_subplot(2, 1, 1)
+    ax1 = fig.add_subplot(2, 1, 2)
+    ax0.plot(prod_step, prod_initial_step, linewidth=1, color="black", alpha=.8)
+    ax0.set_ylabel(r"initial_step")
+    ax0.set_xlabel(r"$step$")
+    ax0.grid()
+    ax1.hist(prod_initial_step[~np.isnan(prod_initial_step)], bins=20, color="black", alpha=.8)
+    ax1.set_xlabel(r"initial_step")
+
+    fig = plt.figure(figsize=(10, 8))
+    mean_parabola_a, std_parabola_a = np.mean(prod_parabola_a), np.std(prod_parabola_a)
+    fig.suptitle(rf"$a = \frac{{1}}{{2}}U''$. $\mu={mean_parabola_a:.02f}$; $\sigma={std_parabola_a:.03f}={std_parabola_a/mean_parabola_a*100:.02f}\%$")
+    ax0 = fig.add_subplot(2, 1, 1)
+    ax1 = fig.add_subplot(2, 1, 2)
+    ax0.plot(prod_step, prod_parabola_a, linewidth=1, color="black", alpha=.8)
+    ax0.set_ylabel(r"$a = \frac{1}{2} U''$")
+    ax0.set_xlabel(r"$step$")
+    ax0.grid()
+    ax1.hist(prod_parabola_a[~np.isnan(prod_parabola_a)], bins=20, color="black", alpha=.8)
+    ax1.set_xlabel(r"$a = \frac{1}{2} U''$")
+
+    nblocks, nsaved_per_block, npoints, n = nvu_prod_output["path_u"].shape
+    path_u = nvu_prod_output["path_u"].reshape(nblocks*nsaved_per_block, npoints, n)
+    xs = path_u[:, :, 0].T  # (npoints, npaths)
+    ys = path_u[:, :, 1].T  # (npoints, npaths)
+    # Harmonic approximation:
+    u = np.arange(npoints)/(n - 1) - 0.5
+    p = np.polyfit(u, ys, 2)
+    y_pred = p[0, :] * u[:, np.newaxis]**2 + p[1, :] * u[:, np.newaxis] + p[2, :]
+    fig = plt.figure(figsize=(10, 8))
+    r2 = 1 - np.sum((y_pred - ys)**2) / np.sum((y_pred - y_pred.mean(axis=0))**2)
+    fig.suptitle(rf"$R^2 = {r2}$ when aproximating $U(\lambda)$ to a parabola")
+    ax = fig.add_subplot()
+    rsd = ((y_pred - ys)**2 / (ys - ys.mean(axis=0))**2).flatten()
+    ax.hist(rsd[(~np.isnan(rsd)) & (np.abs(rsd) < float("inf"))], bins=30, color="black", alpha=0.5)
+    # ax.plot(rsd, marker='.', markeredgewidth=0, linewidth=0, markersize=5,
+    #         color="black", alpha=0.5)
+    # ax.hist((y_pred/ys).flatten(), bins=20, color="black", alpha=0.5)
+
     
     fig = plt.figure(figsize=(10, 8))
     mean_vf, std_vf = np.mean(prod_cos_v_f), np.std(prod_cos_v_f)
@@ -570,7 +608,6 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax.set_xlabel(r"$\cos(v,\,f)$")
     ax.set_ylabel(r"$\kappa$")
     ax.grid()
-
 
     nvu_eq_u, eq_dt, eq_its, eq_fsq, eq_lap, eq_cos_v_f, eq_time = \
         rp.extract_scalars(nvu_eq_output, ["U", "dt", "its", "Fsq", "lapU", "cos_v_f", "time", ], 

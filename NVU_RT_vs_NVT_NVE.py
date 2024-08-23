@@ -4,6 +4,7 @@
 #PBS -o out/$PBS_JOBNAME.out
 #PBS -j oe
 
+import dataclasses
 import os
 import sys
 
@@ -632,7 +633,7 @@ and the curvature of Omega or the configuration temperature.""",
 )
 
 
-SimulationVsNVT(
+NVT_DEBUG = SimulationVsNVT(
     name="NVT_debug",
     description=
 """Lennard-Jones. 
@@ -660,11 +661,18 @@ and the curvature of Omega or the configuration temperature.""",
     nvu_params_max_steps=100,
     nvu_params_max_initial_step_corrections=20,
     # I dont really know how to tune this parameter
-    nvu_params_initial_step=10,
+    nvu_params_initial_step=0.5/0.844**(1/3),
     nvu_params_initial_step_if_high=1e-3,
     nvu_params_step=1,
     nvu_params_save_path_u=True,
     nvu_params_root_method="parabola",
+)
+
+dataclasses.replace(
+    NVT_DEBUG,
+    name="NVT_debug_low_rho",
+    rho=0.45,
+    nvu_params_initial_step=0.5/0.45**(1/3),
 )
 
 if __name__ == "__main__":
