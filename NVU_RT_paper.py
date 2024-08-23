@@ -667,7 +667,7 @@ Try to prove that time-reversibility is essential for the integrator""",
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("-r", "--run", help="Not used saved results", nargs='*')
+    parser.add_argument("-r", "--run", help="Not used saved results", nargs='*', default=[])
     parser.add_argument("-m", "--method", help="Run Method", action="store_true")
     parser.add_argument("-l", "--lj", help="Run Lennard-Jones", action="store_true")
     parser.add_argument("-k", "--ka", help="Run Kob-Andersen", action="store_true")
