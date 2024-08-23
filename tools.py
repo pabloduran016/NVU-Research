@@ -246,7 +246,7 @@ class SimulationParameters:
                         raise ValueError(f"For potential Kob-Andersen every parameter has to be a (2, 2) numpy array, but got type {type(val)}")
                     if val.shape != (2, 2):
                         raise ValueError(f"For potential Kob-Andersen every parameter has to have shape (2, 2), but got {val.shape} for parameter {name}")
-            pair_f = rp.apply_shifted_potential_cutoff(rp.LJ_12_6_sigma_epsilon)
+            pair_f = rp.apply_shifted_force_cutoff(rp.LJ_12_6_sigma_epsilon)
             param_values = tuple(self.pair_potential_params[name] for name in params)
             return rp.PairPotential(pair_f, param_values, max_num_nbs=1000)
         else:
@@ -390,8 +390,8 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     r2 = 1 - np.sum((y_pred - ys)**2) / np.sum((y_pred - y_pred.mean(axis=0))**2)
     fig.suptitle(rf"$R^2 = {r2}$ when aproximating $U(\lambda)$ to a parabola")
     ax = fig.add_subplot()
-    rsd = (y_pred - ys)**2 / (ys - ys.mean(axis=0))**2
-    ax.hist(rsd.flatten(), bins=30, color="black", alpha=0.5)
+    rsd = ((y_pred - ys)**2 / (ys - ys.mean(axis=0))**2).flatten()
+    ax.hist(rsd[~np.isnan(rsd)], bins=30, color="black", alpha=0.5)
     # ax.plot(rsd, marker='.', markeredgewidth=0, linewidth=0, markersize=5,
     #         color="black", alpha=0.5)
     # ax.hist((y_pred/ys).flatten(), bins=20, color="black", alpha=0.5)
@@ -402,13 +402,14 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     prod_cos_v_f[prod_cos_v_f > 1] = 1
     prod_cos_v_f[prod_cos_v_f < -1] = -1
 
-    prod_dt = prod_dt * (np.pi / 2 - np.arccos(prod_cos_v_f)) / prod_cos_v_f
+    correction = np.pi / 2 - np.arccos(prod_cos_v_f)
+    prod_dt = prod_dt * correction / prod_cos_v_f
     fig = plt.figure(figsize=(10, 8))
     fig.suptitle(r"Correction to delta time so that $\Delta t' = \Delta t \cdot \frac{\alpha}{\cos \theta}$. $\alpha$ comp. of $\theta$")
     ax0 = fig.add_subplot(2, 1, 1)
-    ax0.plot(np.pi / 2 - np.arccos(prod_cos_v_f), color="black", alpha=.5)
+    ax0.plot(correction, color="black", alpha=.5)
     ax1 = fig.add_subplot(2, 1, 2)
-    ax1.hist(np.pi / 2 - np.arccos(prod_cos_v_f), color="black", alpha=.5)
+    ax1.hist(correction[~np.isnan(correction)], color="black", alpha=.5)
 
     nvu_prod_du_rel = (nvu_prod_u - target_u) / abs(target_u)
     fig = plt.figure(figsize=(10, 10))
@@ -476,7 +477,7 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax0.set_ylabel(r"$\Delta t$")
     ax0.set_xlabel(r"$step$")
     ax0.grid()
-    ax1.hist(prod_dt, bins=20, color="black", alpha=.8)
+    ax1.hist(prod_dt[~np.isnan(prod_dt)], bins=20, color="black", alpha=.8)
     ax1.set_xlabel(r"$\Delta t$")
 
     fig = plt.figure(figsize=(10, 8))

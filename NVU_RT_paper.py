@@ -14,6 +14,7 @@ if 'PBS_O_WORKDIR' in os.environ:
     sys.path.append(".")
     sys.path.append("../rumdpy-dev/")
 
+import traceback
 import dataclasses
 from matplotlib.gridspec import GridSpec
 from numba import cuda
@@ -22,8 +23,8 @@ import matplotlib.pyplot as plt
 import rumdpy as rp
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, Tuple, Optional, Union
-from tools import SimulationParameters, SimulationVsNVE, SimulationVsNVT, \
+from typing import Any, Dict, Set, Tuple, Optional, Union
+from tools import KNOWN_SIMULATIONS, SimulationParameters, SimulationVsNVE, SimulationVsNVT, \
     load_conf_from_npz, plot_nvu_vs_figures, run_NVTorNVE, run_NVU_RT, \
     save_current_figures_to_pdf
 import numpy as np
@@ -31,7 +32,6 @@ import numpy.typing as npt
 
 
 FloatArray = npt.NDArray[np.float32]
-
 
 @dataclass
 class Output:
@@ -153,14 +153,14 @@ def get_rdf(output: Dict[str, Any]) -> Dict[str, FloatArray]:
     return rdf
 
 
-def method(run_new: bool) -> None:
+def method(run_new: Set[str]) -> None:
     ## DISTRIBUTION OF DELTA TIMES
     ##   - Plot \Delta t over steps
-    output_n0 = get_output(LJ_N0, run_new=run_new)
+    output_n0 = get_output(LJ_N0, run_new=LJ_N0.name in run_new)
     n0 = output_n0.prod_output["block"].shape[3]
-    output_n1 = get_output(LJ_N1, run_new=run_new)
+    output_n1 = get_output(LJ_N1, run_new=LJ_N1.name in run_new)
     n1 = output_n1.prod_output["block"].shape[3]
-    output_n2 = get_output(LJ_N2, run_new=run_new)
+    output_n2 = get_output(LJ_N2, run_new=LJ_N2.name in run_new)
     n2 = output_n2.prod_output["block"].shape[3]
     n0_dt = get_delta_time(output_n0.prod_output)
     n0_steps = get_steps(output_n0.prod_output)
@@ -259,9 +259,9 @@ def method(run_new: bool) -> None:
     fig.savefig(FIG_PARABOLAS_RELATIVE_ERROR)
     plt.close(fig)
 
-    indices = np.argsort(ys.max(axis=0))[[0, 1, 4, -1]]
-    # print(indices)
-    fig = plt.figure()
+    indices = np.argsort(ys.max(axis=0))[::-1][[0, 1, 2, 20]]
+    print(indices)
+    fig = plt.figure(figsize=(8, 5))
     ax = fig.add_subplot()
     for i, path_i in enumerate(indices):
         x_i = xs[:, path_i]
@@ -285,10 +285,10 @@ def method(run_new: bool) -> None:
     plt.close(fig)
 
 
-def lennard_jones(run_new: bool) -> None:
-    output_a = get_output(LJ_A, run_new=run_new)
-    output_b = get_output(LJ_B, run_new=run_new)
-    output_c = get_output(LJ_C, run_new=run_new)
+def lennard_jones(run_new: Set[str]) -> None:
+    output_a = get_output(LJ_A, run_new=LJ_A.name in run_new)
+    output_b = get_output(LJ_B, run_new=LJ_B.name in run_new)
+    output_c = get_output(LJ_C, run_new=LJ_C.name in run_new)
 
     fig = plt.figure(figsize=(10, 8))
     gs = GridSpec(2, 4, wspace=.5, hspace=.2)
@@ -343,9 +343,9 @@ def lennard_jones(run_new: bool) -> None:
     fig.savefig(FIG_LJ_MSD)
 
 
-def kob_andersen(run_new: bool) -> None:
+def kob_andersen(run_new: Set[str]) -> None:
     outputs = [
-        get_output(params, run_new=run_new)
+        get_output(params, run_new=params.name in run_new)
         for params in KA_PARAMS
     ]
 
@@ -398,60 +398,42 @@ def kob_andersen(run_new: bool) -> None:
     fig.savefig(FIG_KA_MSD)
 
 
-def no_inertia(run_new: bool) -> None:
-    output_a = get_output(NI_A, run_new=run_new)
-    output_b = get_output(NI_B, run_new=run_new)
-    output_c = get_output(NI_C, run_new=run_new)
+def no_inertia(run_new: Set[str]) -> None:
+    output = get_output(NI, run_new=NI.name in run_new)
 
     fig = plt.figure(figsize=(10, 8))
-    gs = GridSpec(2, 4, wspace=.5, hspace=.2)
-    ax_a = fig.add_subplot(gs[0, 0:2])
-    ax_b = fig.add_subplot(gs[0, 2:4])
-    ax_c = fig.add_subplot(gs[1, 1:3])
-    for ax, output, params in (
-        (ax_a, output_a, LJ_A),
-        (ax_b, output_b, LJ_B),
-        (ax_c, output_c, LJ_C)
-    ):
-        rdf = np.mean(output.prod_rdf["rdf"], axis=0)[::10]
-        distances = output.prod_rdf["distances"][::10]
-        other_rdf = np.mean(output.other_prod_rdf["rdf"], axis=0)
-        ax.plot(output.other_prod_rdf["distances"], other_rdf, linewidth=1, color="black", label="NVT")
-        ax.plot(distances, rdf, marker='.', linewidth=0, 
-            markeredgewidth=1, markersize=9, markeredgecolor="black",
-            color="red", alpha=.9, label="NVU_RT (no inertia)")
-        ax.annotate(rf"temperature = ${params.temperature}$", (0.4, 0.62), xycoords="axes fraction")
-        ax.annotate(rf"$\rho$ = ${params.rho}$", (0.4, 0.55), xycoords="axes fraction")
-        ax.grid(alpha=.3)
-        ax.legend()
+    ax = fig.add_subplot()
+    rdf = np.mean(output.prod_rdf["rdf"], axis=0)[::10]
+    distances = output.prod_rdf["distances"][::10]
+    other_rdf = np.mean(output.other_prod_rdf["rdf"], axis=0)
+    ax.plot(output.other_prod_rdf["distances"], other_rdf, linewidth=1, color="black", label="NVT")
+    ax.plot(distances, rdf, marker='.', linewidth=0, 
+        markeredgewidth=1, markersize=9, markeredgecolor="black",
+        color="red", alpha=.9, label="NVU_RT (no inertia)")
+    ax.annotate(rf"temperature = ${NI.temperature}$", (0.4, 0.62), xycoords="axes fraction")
+    ax.annotate(rf"$\rho$ = ${NI.rho}$", (0.4, 0.55), xycoords="axes fraction")
+    ax.grid(alpha=.3)
+    ax.legend()
     fig.tight_layout()
     fig.savefig(FIG_NI_RDF)
 
     fig = plt.figure(figsize=(10, 8))
-    gs = GridSpec(2, 4, wspace=.5, hspace=.2)
-    ax_a = fig.add_subplot(gs[0, 0:2])
-    ax_b = fig.add_subplot(gs[0, 2:4])
-    ax_c = fig.add_subplot(gs[1, 1:3])
-    for ax, output, params in (
-        (ax_a, output_a, LJ_A),
-        (ax_b, output_b, LJ_B),
-        (ax_c, output_c, LJ_C)
-    ):
-        msd = get_msd(output.prod_output)
-        dt = get_delta_time(output.prod_output)
-        time = np.mean(dt) * 2 ** np.arange(len(msd))
+    ax = fig.add_subplot()
+    msd = get_msd(output.prod_output)
+    dt = get_delta_time(output.prod_output)
+    time = np.mean(dt) * 2 ** np.arange(len(msd))
 
-        other_msd = get_msd(output.other_prod_output)
-        other_time = params.dt * 2 ** np.arange(len(other_msd))
+    other_msd = get_msd(output.other_prod_output)
+    other_time = NI.dt * 2 ** np.arange(len(other_msd))
 
-        ax.loglog(other_time, other_msd, linewidth=1, color="black", label="NVT")
-        ax.loglog(time, msd, marker='.', linewidth=0, 
-                  markeredgewidth=1, markersize=9, markeredgecolor="black",
-                  color="red", alpha=.9, label="NVU_RT (no inertia)")
-        ax.annotate(rf"temperature = ${params.temperature}$", (0.5, 0.32), xycoords="axes fraction")
-        ax.annotate(rf"$\rho$ = ${params.rho}$", (0.5, 0.25), xycoords="axes fraction")
-        ax.grid(alpha=.3)
-        ax.legend()
+    ax.loglog(other_time, other_msd, linewidth=1, color="black", label="NVT")
+    ax.loglog(time, msd, marker='.', linewidth=0, 
+              markeredgewidth=1, markersize=9, markeredgecolor="black",
+              color="red", alpha=.9, label="NVU_RT (no inertia)")
+    ax.annotate(rf"temperature = ${NI.temperature}$", (0.5, 0.32), xycoords="axes fraction")
+    ax.annotate(rf"$\rho$ = ${NI.rho}$", (0.5, 0.25), xycoords="axes fraction")
+    ax.grid(alpha=.3)
+    ax.legend()
     fig.tight_layout()
     fig.savefig(FIG_NI_MSD)
 
@@ -462,16 +444,28 @@ def main(
     run_lj: bool, 
     run_ka: bool, 
     run_no_inertia: bool,
-    run_new: bool,
+    run_new: Set[str],
 ) -> None:
     if run_method:
-        method(run_new=run_new)
+        try:
+            method(run_new=run_new)
+        except Exception:
+            traceback.print_exc()
     if run_lj:
-        lennard_jones(run_new=run_new)
+        try:
+            lennard_jones(run_new=run_new)
+        except Exception:
+            traceback.print_exc()
     if run_ka:
-        kob_andersen(run_new=run_new)
+        try:
+            kob_andersen(run_new=run_new)
+        except Exception:
+            traceback.print_exc()
     if run_no_inertia:
-        no_inertia(run_new=run_new)
+        try:
+            no_inertia(run_new=run_new)
+        except Exception:
+            traceback.print_exc()
 
 
 DATA_ROOT_FOLDER = "paper-output"
@@ -497,9 +491,9 @@ LJ_N0 = SimulationVsNVT(
 """Single-component Lennard-Jones""",
     root_folder=DATA_ROOT_FOLDER,
     rho=0.85,
-    steps=2**15,
-    steps_per_timeblock=2**10,
-    scalar_output=16,
+    steps=2**19,
+    steps_per_timeblock=2**13,
+    scalar_output=2**6,
     temperature=2.32,
     tau=0.2,
     dt=0.005,
@@ -508,8 +502,8 @@ LJ_N0 = SimulationVsNVT(
     pair_potential_name="LJ",
     pair_potential_params={ "eps": 1, "sig": 1, "cut": 2.5},
     nvu_params_max_abs_val=2,
-    nvu_params_threshold=1e-5,
-    nvu_params_eps=1e-6,
+    nvu_params_threshold=1e-6,
+    nvu_params_eps=1e-7,
     nvu_params_max_steps=20,
     nvu_params_max_initial_step_corrections=20,
     nvu_params_initial_step=1,
@@ -523,7 +517,7 @@ LJ_N0 = SimulationVsNVT(
 LJ_N1 = dataclasses.replace(
     LJ_N0,
     name="LJ_N1",
-    cells=[4, 8, 8],
+    cells=[8, 8, 8],
 )
 
 LJ_N2 = dataclasses.replace(
@@ -541,9 +535,9 @@ Figure 5 a of paper I""",
     root_folder=DATA_ROOT_FOLDER,
     rho=0.85,
     temperature=2.32,
-    steps=2**19,
-    steps_per_timeblock=2**14,
-    scalar_output=2**8,
+    steps=2**22,
+    steps_per_timeblock=2**17,
+    scalar_output=2**10,
     tau=0.2,
     dt=0.005,
     cells=[8, 8, 8],
@@ -551,8 +545,8 @@ Figure 5 a of paper I""",
     pair_potential_name="LJ",
     pair_potential_params={ "eps": 1, "sig": 1, "cut": 2.5},
     nvu_params_max_abs_val=2,
-    nvu_params_threshold=1e-5,
-    nvu_params_eps=1e-6,
+    nvu_params_threshold=1e-6,
+    nvu_params_eps=1e-7,
     nvu_params_max_steps=20,
     nvu_params_max_initial_step_corrections=20,
     nvu_params_initial_step=1,
@@ -567,7 +561,8 @@ LJ_B = dataclasses.replace(
     LJ_A,
     name="LJ_B",
     rho=.427,
-    temperature=1.10
+    temperature=1.10,
+    nvu_params_initial_step=10,
 )
 
 LJ_C = dataclasses.replace(
@@ -593,9 +588,9 @@ Figure 2 a and b of paper II""",
     root_folder=DATA_ROOT_FOLDER,
     rho=1.2,
     temperature=2,
-    steps=2**19,
-    steps_per_timeblock=2**14,
-    scalar_output=2**7,
+    steps=2**25,
+    steps_per_timeblock=2**20,
+    scalar_output=2**13,
     tau=0.2,
     dt=0.005,
     cells=[8, 8, 8],
@@ -603,8 +598,8 @@ Figure 2 a and b of paper II""",
     pair_potential_name="Kob-Andersen",
     pair_potential_params=kob_andersen_parameters,
     nvu_params_max_abs_val=2,
-    nvu_params_threshold=1e-5,
-    nvu_params_eps=1e-6,
+    nvu_params_threshold=1e-6,
+    nvu_params_eps=1e-7,
     nvu_params_max_steps=20,
     nvu_params_max_initial_step_corrections=20,
     nvu_params_initial_step=1,
@@ -640,52 +635,47 @@ for i in range(1, len(KA_TEMPERATURES)):
 #         plt.show()
 # exit(0)
 
-NI_A = dataclasses.replace(
-    LJ_A,
-    name="NI_A",
+NI = SimulationVsNVT(
+    name="NI",
+    description=
+"""Single-component Lennard-Jones.
+Try to prove that time-reversibility is essential for the integrator""",
+    root_folder=DATA_ROOT_FOLDER,
+    rho=0.85,
+    temperature=2.32,
     steps=2**15,
     steps_per_timeblock=2**10,
     scalar_output=2**4,
+    tau=0.2,
+    dt=0.005,
+    cells=[8, 8, 8],
+
+    pair_potential_name="LJ",
+    pair_potential_params={ "eps": 1, "sig": 1, "cut": 2.5},
     nvu_params_mode="no-inertia",
     nvu_params_root_method="bisection",
-)
-NI_B = dataclasses.replace(
-    LJ_B,
-    name="NI_B",
-    steps=2**15,
-    steps_per_timeblock=2**10,
-    scalar_output=2**4,
-    nvu_params_mode="no-inertia",
-    nvu_params_root_method="bisection",
-)
-NI_C = dataclasses.replace(
-    LJ_C,
-    name="NI_C",
-    steps=2**15,
-    steps_per_timeblock=2**10,
-    scalar_output=2**4,
-    nvu_params_mode="no-inertia",
-    nvu_params_root_method="bisection",
+    nvu_params_max_steps=1000,
+    nvu_params_max_initial_step_corrections=20,
+    nvu_params_initial_step=.1,
+    nvu_params_initial_step_if_high=.1,
+    nvu_params_step=.1,
+    nvu_params_max_abs_val=2,
+    nvu_params_threshold=1e-6,
+    nvu_params_eps=1e-7,
 )
 
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("-r", "--run", help="Not used saved results", action="store_true")
+    parser.add_argument("-r", "--run", help="Not used saved results", nargs='*')
     parser.add_argument("-m", "--method", help="Run Method", action="store_true")
     parser.add_argument("-l", "--lj", help="Run Lennard-Jones", action="store_true")
     parser.add_argument("-k", "--ka", help="Run Kob-Andersen", action="store_true")
     parser.add_argument("-n", "--no_inertia", help="Run No inertia", action="store_true")
     parser.add_argument("-d", "--device", help="Select NVIDIA device", type=int, default=None)
     if 'PBS_O_WORKDIR' in os.environ:
-        flags = os.environ.get("flags", None)
-        device = os.environ.get("device", None)
-        args_str = ''
-        if flags is not None:
-            args_str += f" -{flags}"
-        if device is not None:
-            args_str += f" --device {device}"
-        raw_args = args_str.split()
+        flags = os.environ.get("flags", "")
+        raw_args = flags.split()
     else:
         raw_args = None
     args = parser.parse_args(raw_args)
@@ -693,11 +683,16 @@ if __name__ == "__main__":
     if args.device is not None:
         print("Using device:", args.device)
         cuda.select_device(args.device)
+
+    for name in args.run:
+        if name not in KNOWN_SIMULATIONS:
+            raise ValueError(f"Expected one of `{', '.join(KNOWN_SIMULATIONS.keys())}` for the run argument, but got `{name}`")
+
     main(
         run_method=args.method, 
         run_lj=args.lj, 
         run_ka=args.ka, 
         run_no_inertia=args.no_inertia,
-        run_new=args.run
+        run_new=set(args.run),
     )
 

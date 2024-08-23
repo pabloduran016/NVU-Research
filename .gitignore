@@ -1,0 +1,8 @@
+__pycache__/
+libcudadevrt.a
+out/
+output/
+rdf.dat
+*.DS_Store
+paper-figs
+paper-output
