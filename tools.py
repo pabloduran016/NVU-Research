@@ -391,7 +391,7 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     fig.suptitle(rf"$R^2 = {r2}$ when aproximating $U(\lambda)$ to a parabola")
     ax = fig.add_subplot()
     rsd = ((y_pred - ys)**2 / (ys - ys.mean(axis=0))**2).flatten()
-    ax.hist(rsd[~np.isnan(rsd)], bins=30, color="black", alpha=0.5)
+    ax.hist(rsd[(~np.isnan(rsd)) & (np.abs(rsd) < float("inf"))], bins=30, color="black", alpha=0.5)
     # ax.plot(rsd, marker='.', markeredgewidth=0, linewidth=0, markersize=5,
     #         color="black", alpha=0.5)
     # ax.hist((y_pred/ys).flatten(), bins=20, color="black", alpha=0.5)
