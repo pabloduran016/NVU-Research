@@ -512,23 +512,24 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax1.hist(prod_parabola_a[~np.isnan(prod_parabola_a)], bins=20, color="black", alpha=.8)
     ax1.set_xlabel(r"$a = \frac{1}{2} U''$")
 
-    nblocks, nsaved_per_block, npoints, n = nvu_prod_output["path_u"].shape
-    path_u = nvu_prod_output["path_u"].reshape(nblocks*nsaved_per_block, npoints, n)
-    xs = path_u[:, :, 0].T  # (npoints, npaths)
-    ys = path_u[:, :, 1].T  # (npoints, npaths)
-    # Harmonic approximation:
-    u = np.arange(npoints)/(n - 1) - 0.5
-    p = np.polyfit(u, ys, 2)
-    y_pred = p[0, :] * u[:, np.newaxis]**2 + p[1, :] * u[:, np.newaxis] + p[2, :]
-    fig = plt.figure(figsize=(10, 8))
-    r2 = 1 - np.sum((y_pred - ys)**2) / np.sum((y_pred - y_pred.mean(axis=0))**2)
-    fig.suptitle(rf"$R^2 = {r2}$ when aproximating $U(\lambda)$ to a parabola")
-    ax = fig.add_subplot()
-    rsd = ((y_pred - ys)**2 / (ys - ys.mean(axis=0))**2).flatten()
-    ax.hist(rsd[(~np.isnan(rsd)) & (np.abs(rsd) < float("inf"))], bins=30, color="black", alpha=0.5)
-    # ax.plot(rsd, marker='.', markeredgewidth=0, linewidth=0, markersize=5,
-    #         color="black", alpha=0.5)
-    # ax.hist((y_pred/ys).flatten(), bins=20, color="black", alpha=0.5)
+    if "path_u" in nvu_prod_output:
+        nblocks, nsaved_per_block, npoints, n = nvu_prod_output["path_u"].shape
+        path_u = nvu_prod_output["path_u"].reshape(nblocks*nsaved_per_block, npoints, n)
+        xs = path_u[:, :, 0].T  # (npoints, npaths)
+        ys = path_u[:, :, 1].T  # (npoints, npaths)
+        # Harmonic approximation:
+        u = np.arange(npoints)/(n - 1) - 0.5
+        p = np.polyfit(u, ys, 2)
+        y_pred = p[0, :] * u[:, np.newaxis]**2 + p[1, :] * u[:, np.newaxis] + p[2, :]
+        fig = plt.figure(figsize=(10, 8))
+        r2 = 1 - np.sum((y_pred - ys)**2) / np.sum((y_pred - y_pred.mean(axis=0))**2)
+        fig.suptitle(rf"$R^2 = {r2}$ when aproximating $U(\lambda)$ to a parabola")
+        ax = fig.add_subplot()
+        rsd = ((y_pred - ys)**2 / (ys - ys.mean(axis=0))**2).flatten()
+        ax.hist(rsd[(~np.isnan(rsd)) & (np.abs(rsd) < float("inf"))], bins=30, color="black", alpha=0.5)
+        # ax.plot(rsd, marker='.', markeredgewidth=0, linewidth=0, markersize=5,
+        #         color="black", alpha=0.5)
+        # ax.hist((y_pred/ys).flatten(), bins=20, color="black", alpha=0.5)
 
     
     fig = plt.figure(figsize=(10, 8))
