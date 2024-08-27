@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 #PBS -v PYTHONPATH
-#PBS -l nodes=bead59
+#PBS -l nodes=bead53
 #PBS -o out/$PBS_JOBNAME.out
 #PBS -j oe
 
@@ -59,7 +59,7 @@ def scientific_notation(v: Union[float, np.float32], n: int) -> str:
     return s
 
 
-def get_output(params: SimulationParameters, run_new: bool) -> Output:
+def get_output(params: SimulationParameters, rdf_new: bool) -> Output:
     params.init()
 
     if type(params) == SimulationVsNVT:
@@ -73,18 +73,11 @@ def get_output(params: SimulationParameters, run_new: bool) -> Output:
     else:
         raise ValueError("Expected vs NVE or vs NVT")
 
-    if run_new or not os.path.exists(other_output_path) or not os.path.exists(eq_conf0_path):
-        run_NVTorNVE(params)
     print(f"Loading {kind} production output from path `{other_output_path}`")
     other_prod_output = rp.tools.load_output(other_output_path)
     print(f"Loading NVU EQ initial configuration from path `{eq_conf0_path}`")
     eq_conf0, target_u = load_conf_from_npz(eq_conf0_path)
 
-    if run_new or not os.path.exists(params.nvu_output):
-        do_nvu_eq = True
-        if not run_new and os.path.exists(params.nvu_eq_output) and os.path.exists(params.nvu_eq_conf_output):
-            do_nvu_eq = False
-        run_NVU_RT(params, do_nvu_eq)
     print(f"Loading NVU EQ output from path `{params.nvu_eq_output}`")
     nvu_eq_output = rp.tools.load_output(params.nvu_eq_output)
     print(f"Loading NVU PROD initial configuration from path `{params.nvu_eq_conf_output}`")
@@ -92,18 +85,13 @@ def get_output(params: SimulationParameters, run_new: bool) -> Output:
     print(f"Loading NVU PROD output from path `{params.nvu_output}`")
     nvu_prod_output = rp.tools.load_output(params.nvu_output)
 
-    if run_new or not os.path.exists(params.output_figs):
-        plot_nvu_vs_figures(params)
-        save_current_figures_to_pdf(params.output_figs)
-        plt.close("all")
-
-    if run_new or not os.path.exists(params.other_prod_rdf):
+    if rdf_new or not os.path.exists(params.other_prod_rdf):
         other_prod_rdf = get_rdf(other_prod_output)
         np.savez(params.other_prod_rdf, **other_prod_rdf)
     else:
         other_prod_rdf = np.load(params.other_prod_rdf)
 
-    if run_new or not os.path.exists(params.nvu_prod_rdf):
+    if rdf_new or not os.path.exists(params.nvu_prod_rdf):
         prod_rdf = get_rdf(nvu_prod_output)
         np.savez(params.nvu_prod_rdf, **prod_rdf)
     else:
@@ -166,14 +154,14 @@ def get_rdf(output: Dict[str, Any]) -> Dict[str, FloatArray]:
     return rdf
 
 
-def method(run_new: Set[str], run_all: bool) -> None:
+def method(rdf_new: Set[str], rdf_all: bool) -> None:
     ## DISTRIBUTION OF DELTA TIMES
     ##   - Plot \Delta t over steps
-    output_n0 = get_output(LJ_N0, run_new=LJ_N0.name in run_new or run_all)
+    output_n0 = get_output(LJ_N0, rdf_new=LJ_N0.name in rdf_new or rdf_all)
     n0 = output_n0.prod_output["block"].shape[3]
-    output_n1 = get_output(LJ_N1, run_new=LJ_N1.name in run_new or run_all)
+    output_n1 = get_output(LJ_N1, rdf_new=LJ_N1.name in rdf_new or rdf_all)
     n1 = output_n1.prod_output["block"].shape[3]
-    output_n2 = get_output(LJ_N2, run_new=LJ_N2.name in run_new or run_all)
+    output_n2 = get_output(LJ_N2, rdf_new=LJ_N2.name in rdf_new or rdf_all)
     n2 = output_n2.prod_output["block"].shape[3]
     n0_dt = get_delta_time(output_n0.prod_output)
     n0_steps = get_steps(output_n0.prod_output)
@@ -309,10 +297,10 @@ def method(run_new: Set[str], run_all: bool) -> None:
     plt.close(fig)
 
 
-def lennard_jones(run_new: Set[str], run_all: bool) -> None:
-    output_a = get_output(LJ_A, run_new=LJ_A.name in run_new or run_all)
-    output_b = get_output(LJ_B, run_new=LJ_B.name in run_new or run_all)
-    output_c = get_output(LJ_C, run_new=LJ_C.name in run_new or run_all)
+def lennard_jones(rdf_new: Set[str], rdf_all: bool) -> None:
+    output_a = get_output(LJ_A, rdf_new=LJ_A.name in rdf_new or rdf_all)
+    output_b = get_output(LJ_B, rdf_new=LJ_B.name in rdf_new or rdf_all)
+    output_c = get_output(LJ_C, rdf_new=LJ_C.name in rdf_new or rdf_all)
 
     fig = plt.figure(figsize=(8, 6))
     gs = GridSpec(2, 4, wspace=.6, hspace=.2)
@@ -376,13 +364,14 @@ def lennard_jones(run_new: Set[str], run_all: bool) -> None:
     fig.savefig(FIG_LJ_MSD)
 
 
-def kob_andersen(run_new: Set[str], run_all: bool) -> None:
+def kob_andersen(rdf_new: Set[str], rdf_all: bool) -> None:
     outputs = [
-        get_output(params, run_new=params.name in run_new or run_all)
+        get_output(
+            (params if params.name not in USE_BACKUP else USE_BACKUP[params.name]), rdf_new=params.name in rdf_new or rdf_all)
         for params in KA_PARAMS
     ]
 
-    fig = plt.figure(figsize=(10, 8))
+    fig = plt.figure(figsize=(4, 6))
     gs = GridSpec(2, 1, wspace=.5, hspace=.2)
     ax_a = fig.add_subplot(gs[0])
     ax_b = fig.add_subplot(gs[1])
@@ -403,9 +392,11 @@ def kob_andersen(run_new: Set[str], run_all: bool) -> None:
         t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
         ax.grid(alpha=.3)
         ax.legend()
+        ax.set_xlabel("$r$")
+        ax.set_ylabel("$g(r)$")
     fig.savefig(FIG_KA_RDF)
 
-    fig = plt.figure(figsize=(10, 8))
+    fig = plt.figure(figsize=(4, 3))
     gs = GridSpec(3, 3, wspace=.5, hspace=.2)
     ax = fig.add_subplot()
     for i, (output, params) in enumerate(zip(outputs, KA_PARAMS)):
@@ -434,8 +425,8 @@ def kob_andersen(run_new: Set[str], run_all: bool) -> None:
     fig.savefig(FIG_KA_MSD)
 
 
-def no_inertia(run_new: Set[str], run_all: bool) -> None:
-    output = get_output(NI, run_new=NI.name in run_new or run_all)
+def no_inertia(rdf_new: Set[str], rdf_all: bool) -> None:
+    output = get_output(NI, rdf_new=NI.name in rdf_new or rdf_all)
 
     fig = plt.figure(figsize=(8, 3))
     gs = GridSpec(1, 2, wspace=0)
@@ -482,27 +473,27 @@ def main(
     run_lj: bool, 
     run_ka: bool, 
     run_no_inertia: bool,
-    run_new: Set[str],
-    run_all: bool,
+    rdf_new: Set[str],
+    rdf_all: bool,
 ) -> None:
     if run_method:
         try:
-            method(run_new=run_new, run_all=run_all)
+            method(rdf_new=rdf_new, rdf_all=rdf_all)
         except Exception:
             traceback.print_exc()
     if run_lj:
         try:
-            lennard_jones(run_new=run_new, run_all=run_all)
+            lennard_jones(rdf_new=rdf_new, rdf_all=rdf_all)
         except Exception:
             traceback.print_exc()
     if run_ka:
         try:
-            kob_andersen(run_new=run_new, run_all=run_all)
+            kob_andersen(rdf_new=rdf_new, rdf_all=rdf_all)
         except Exception:
             traceback.print_exc()
     if run_no_inertia:
         try:
-            no_inertia(run_new=run_new, run_all=run_all)
+            no_inertia(rdf_new=rdf_new, rdf_all=rdf_all)
         except Exception:
             traceback.print_exc()
 
@@ -549,7 +540,7 @@ LJ_N0 = SimulationVsNVT(
     nvu_params_step=1,
     nvu_params_mode="reflection",
     nvu_params_save_path_u=True,
-    nvu_params_root_method="parabola",
+    nvu_params_raytracing_method="parabola",
 )
 
 LJ_N1 = dataclasses.replace(
@@ -592,7 +583,7 @@ Figure 5 a of paper I""",
     nvu_params_step=1,
     nvu_params_mode="reflection",
     nvu_params_save_path_u=True,
-    nvu_params_root_method="parabola",
+    nvu_params_raytracing_method="parabola",
 )
 
 LJ_B = dataclasses.replace(
@@ -646,7 +637,7 @@ Figure 2 a and b of paper II""",
     nvu_params_step=1,
     nvu_params_mode="reflection",
     # nvu_params_save_path_u=True,
-    nvu_params_root_method="parabola",
+    nvu_params_raytracing_method="parabola",
 )
 
 KA_PARAMS = [KA0]
@@ -676,6 +667,14 @@ for i in range(1, len(KA_TEMPERATURES)):
     )
     KA_PARAMS.append(p)
 
+dataclasses.replace(
+    KA_PARAMS[6],
+    name=f"KA6_short",
+    steps=2**30,
+    steps_per_timeblock=2**25,
+    scalar_output=2**(30 - 12),
+)
+
 # for i, k in enumerate(KA_PARAMS):
 #     xs = np.arange(0, KA0.steps, KA0.steps_per_timeblock//20) * KA0.dt
 #     print(k.name, k.temperature, k.initial_conf)
@@ -703,7 +702,7 @@ Try to prove that time-reversibility is essential for the integrator""",
     pair_potential_name="LJ",
     pair_potential_params={ "eps": 1, "sig": 1, "cut": 2.5},
     nvu_params_mode="no-inertia",
-    nvu_params_root_method="bisection",
+    nvu_params_raytracing_method="bisection",
     nvu_params_max_steps=1000,
     nvu_params_max_initial_step_corrections=20,
     nvu_params_initial_step=0.5/.85**(1/3),
@@ -714,11 +713,16 @@ Try to prove that time-reversibility is essential for the integrator""",
     nvu_params_eps=1e-7,
 )
 
+USE_BACKUP = {
+    "KA5": dataclasses.replace(KA_PARAMS[5], name="KA5.back"),
+    "KA6": dataclasses.replace(KA_PARAMS[6], name="KA6.back"),
+}
+
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("-r", "--run", help="For specific simulations", nargs='*', default=[])
-    parser.add_argument("-a", "--run_all", help="Re-run all", action="store_true")
+    parser.add_argument("-r", "--rdf", help="Recalculate rdf for simulations", nargs='*', default=[])
+    parser.add_argument("-a", "--rdf_all", help="Recalculate rdf for all", action="store_true")
     parser.add_argument("-m", "--method", help="Run Method", action="store_true")
     parser.add_argument("-l", "--lj", help="Run Lennard-Jones", action="store_true")
     parser.add_argument("-k", "--ka", help="Run Kob-Andersen", action="store_true")
@@ -743,7 +747,7 @@ if __name__ == "__main__":
             except Exception:
                 pass
 
-    for name in args.run:
+    for name in args.rdf:
         if name not in KNOWN_SIMULATIONS:
             raise ValueError(f"Expected one of `{', '.join(KNOWN_SIMULATIONS.keys())}` for the run argument, but got `{name}`")
 
@@ -752,7 +756,7 @@ if __name__ == "__main__":
         run_lj=args.lj, 
         run_ka=args.ka, 
         run_no_inertia=args.no_inertia,
-        run_new=set(args.run),
-        run_all=args.run_all,
+        rdf_new=set(args.rdf),
+        rdf_all=args.rdf_all,
     )
 
