@@ -31,6 +31,10 @@ def run_NVTorNVE(params: "SimulationParameters") -> None:
         conf["m"] = 1.0
         if params.pair_potential_name == "Kob-Andersen":
             conf.ptype[::5] = 1     # Every fifth particle set to type 1 (4:1 mixture)
+        elif params.pair_potential_name == "ASD":
+            B_particles = range(1, conf.N, 2)
+            conf.ptype[B_particles] = 1  # Setting particle type of B particles
+            conf['m'][B_particles] = params.pair_potential_params["b_mass"]  # Setting masses of B particles
         if callable(temp_eq):
             temp0 = temp_eq(0)
         else:
@@ -55,22 +59,26 @@ def run_NVTorNVE(params: "SimulationParameters") -> None:
 
     print(f"========== {kind} EQ ==========")
     sim = rp.Simulation(
-        conf, params.pair_potential, integrator_eq,
+        conf, params.get_pair_potential(conf), integrator_eq,
         num_timeblocks=params.num_timeblocks, steps_per_timeblock=params.steps_per_timeblock,
         storage="memory",
         conf_output="none",
         scalar_output="none",  # type: ignore
         verbose=True)
-    sim.run(verbose=True)
+    for block in sim.timeblocks():
+        print("block=", block, sim.status(per_particle=True))
+    print(sim.summary())
     print(f"========== {kind} PROD ==========")
     sim = rp.Simulation(
-        conf, params.pair_potential, integrator_prod,
+        conf, params.get_pair_potential(conf), integrator_prod,
         num_timeblocks=params.num_timeblocks, 
         steps_per_timeblock=params.steps_per_timeblock,
         scalar_output=params.scalar_output,
         storage=prod_output, 
         verbose=True)
-    sim.run(verbose=True)
+    for block in sim.timeblocks():
+        print("block=", block, sim.status(per_particle=True))
+    print(sim.summary())
 
     other_output_prod = rp.tools.load_output(prod_output)
     positions = other_output_prod["block"][:, :, 0, :, :]
@@ -79,14 +87,14 @@ def run_NVTorNVE(params: "SimulationParameters") -> None:
     target_u = np.mean(u[len(u)*3//4:])
 
     sim = rp.Simulation(
-        conf, params.pair_potential, integrator_prod,
+        conf, params.get_pair_potential(conf), integrator_prod,
         num_timeblocks=params.num_timeblocks, steps_per_timeblock=params.steps_per_timeblock,
         storage="memory",
         conf_output="none",
         scalar_output="none",  # type: ignore
         verbose=True)
     for block in sim.timeblocks():
-        ev = rp.Evaluater(conf, params.pair_potential)
+        ev = rp.Evaluater(conf, params.get_pair_potential(conf))
         ev.evaluate()
         conf_u = np.sum(conf["u"])
         if conf_u <= target_u:
@@ -127,12 +135,12 @@ def run_NVU_RT(params: "SimulationParameters", do_nvu_eq: bool) -> None:
         debug_print=True,
         mode=params.nvu_params_mode,
         save_path_u=params.nvu_params_save_path_u,
-        root_method=params.nvu_params_root_method,
+        raytracing_method=params.nvu_params_raytracing_method
     )
     if do_nvu_eq:
         print("========== NVU EQ ==========")
         sim = rp.Simulation(
-            conf, params.pair_potential, integrator,
+            conf, params.get_pair_potential(conf), integrator,
             num_timeblocks=params.num_timeblocks, 
             steps_per_timeblock=params.steps_per_timeblock,
             storage=params.nvu_eq_output,
@@ -149,7 +157,7 @@ def run_NVU_RT(params: "SimulationParameters", do_nvu_eq: bool) -> None:
 
     print("========== NVU PROD ==========")
     sim = rp.Simulation(
-        conf, params.pair_potential, integrator,
+        conf, params.get_pair_potential(conf), integrator,
         num_timeblocks=params.num_timeblocks, steps_per_timeblock=params.steps_per_timeblock,
         storage=params.nvu_output, 
         scalar_output=params.scalar_output,
@@ -195,7 +203,7 @@ class SimulationParameters:
 
     cells: List[int]
 
-    pair_potential_name: Literal["LJ", "Kob-Andersen"]
+    pair_potential_name: Literal["LJ", "Kob-Andersen", "ASD"]
     pair_potential_params: Dict[str, Union[npt.NDArray[np.float32], float]]
 
     nvu_params_max_abs_val: float
@@ -208,7 +216,7 @@ class SimulationParameters:
     nvu_params_step: float
     nvu_params_mode: Literal["reflection", "no-inertia"] = "reflection"
     nvu_params_save_path_u: bool = False
-    nvu_params_root_method: Literal["parabola", "bisection"] = "bisection"
+    nvu_params_raytracing_method: Literal["parabola", "parabola-newton", "bisection"] = "bisection"
 
     nvu_eq_conf_output = property(lambda self: os.path.join(self.folder, "nvu-rt_eq.npz"))
     nvu_eq_output = property(lambda self: os.path.join(self.folder, "nvu-rt_eq.h5"))
@@ -221,7 +229,6 @@ class SimulationParameters:
 
     def __post_init__(self) -> None:
         self.num_timeblocks = self.steps//self.steps_per_timeblock
-        self.pair_potential = self.get_pair_potential()
 
         if self.name in KNOWN_SIMULATIONS:
             raise ValueError(f"Simulation with name `{self.name}` already exists")
@@ -235,7 +242,7 @@ class SimulationParameters:
 
         self.create_info_file()
 
-    def get_pair_potential(self) -> rp.PairPotential:
+    def get_pair_potential(self, configuration: rp.Configuration) -> rp.PairPotential:
         if self.pair_potential_name == "LJ" or self.pair_potential_name == "Kob-Andersen":
             params = ("sig", "eps", "cut")
             if set(self.pair_potential_params.keys()) != set(params):
@@ -249,6 +256,34 @@ class SimulationParameters:
             pair_f = rp.apply_shifted_force_cutoff(rp.LJ_12_6_sigma_epsilon)
             param_values = tuple(self.pair_potential_params[name] for name in params)
             return rp.PairPotential(pair_f, param_values, max_num_nbs=1000)
+        if self.pair_potential_name == "ASD":
+            params = ("sig", "eps", "cut", "bonds", "b_mass")
+            if set(self.pair_potential_params.keys()) != set(params):
+                raise ValueError(f"Parameters for potential `{self.pair_potential_name}` are {', '.join(params)}, but got {', '.join(self.pair_potential_params.keys())}")
+            for name, val in self.pair_potential_params.items():
+                if name == "b_mass":
+                    if type(val) != float:
+                        raise ValueError(f"For potential ASD parameter `b_mass` has to be a float, but got type {type(val)}")
+                    continue
+                if type(val) != np.ndarray:
+                    raise ValueError(f"For potential ASD parameter {name} has to be a (2, 2) numpy array, but got type {type(val)}")
+                if name in ("sig", "eps", "cut"):
+                    if val.shape != (2, 2):
+                        raise ValueError(f"For potential ASD parameter {name} has to have shape (2, 2), but got {val.shape} for parameter {name}")
+                elif name == "bonds":
+                    if val.shape != (1, 2):
+                        raise ValueError(f"For potential ASD parameter {name} has to have shape (1, 2), but got {val.shape} for parameter {name}")
+                else:
+                    assert False, "Unreachable"
+
+            bond_potential = rp.harmonic_bond_function
+            bond_params = self.pair_potential_params["bonds"]
+            bond_indices = [[i, i + 1, 0] for i in range(0, configuration.N - 1, 2)]  # dumbells: i(even) and i+1 bonded with type 0
+            bonds = rp.Bonds(bond_potential, bond_params, bond_indices)
+            pair_f = rp.apply_shifted_force_cutoff(rp.LJ_12_6_sigma_epsilon)
+            exclusions = bonds.get_exclusions(configuration)
+            param_values = tuple(self.pair_potential_params[name] for name in ("sig", "eps", "cut"))
+            return rp.PairPotential(pair_f, param_values, exclusions=exclusions, max_num_nbs=1000)
         else:
             raise ValueError(f"Unknwon potential name `{self.pair_potential_name}`")
 
@@ -284,7 +319,7 @@ class SimulationParameters:
             ("initial_step_if_high", self.nvu_params_initial_step_if_high),
             ("step", self.nvu_params_step),
             ("mode", self.nvu_params_mode),
-            ("root_method", self.nvu_params_root_method),
+            ("raytracing_method", self.nvu_params_raytracing_method),
         ):
             info += f"{name} = {val}\n"
         return info
@@ -378,8 +413,8 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     nvu_prod_output = rp.tools.load_output(params.nvu_output)
     nvu_eq_output = rp.tools.load_output(params.nvu_eq_output)
 
-    nvu_prod_u, prod_dt, prod_its, prod_fsq, prod_lap, prod_cos_v_f, prod_time, prod_parabola_a, prod_initial_step, prod_initial_step_corrections = \
-        rp.extract_scalars(nvu_prod_output, ["U", "dt", "its", "Fsq", "lapU", "cos_v_f", "time", "parabola_a", "initial_step", "initial_step_corrections"], 
+    nvu_prod_u, prod_dt, prod_its, prod_fsq, prod_lap, prod_cos_v_f, prod_time, = \
+        rp.extract_scalars(nvu_prod_output, ["U", "dt", "its", "Fsq", "lapU", "cos_v_f", "time", ], 
                            integrator_outputs=rp.integrators.NVU_RT.outputs)
     prod_cos_v_f[prod_cos_v_f > 1] = 1
     prod_cos_v_f[prod_cos_v_f < -1] = -1
@@ -475,42 +510,6 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax1.hist(prod_its, bins=20, color="black", alpha=.8)
     ax1.set_xlabel(r"iterations")
     ax1.grid()
-
-    fig = plt.figure(figsize=(10, 8))
-    mean_initial_step_corrections, std_initial_step_corrections = np.mean(prod_initial_step_corrections), np.std(prod_initial_step_corrections)
-    fig.suptitle(rf"initial_step_corrections. $\mu={mean_initial_step_corrections:.03f}$; $\sigma={std_initial_step_corrections:.03f}={std_initial_step_corrections/mean_initial_step_corrections*100:.02f}\%$")
-    ax0 = fig.add_subplot(2, 1, 1)
-    ax1 = fig.add_subplot(2, 1, 2)
-    ax0.plot(prod_step, prod_initial_step_corrections, linewidth=1, color="black", alpha=.8)
-    ax0.set_ylabel(r"initial_step_corrections")
-    ax0.set_xlabel(r"$step$")
-    ax0.grid()
-    ax1.hist(prod_initial_step_corrections[~np.isnan(prod_initial_step_corrections)], bins=20, color="black", alpha=.8)
-    ax1.set_xlabel(r"initial_step_corrections")
-
-    fig = plt.figure(figsize=(10, 8))
-    mean_initial_step, std_initial_step = np.mean(prod_initial_step), np.std(prod_initial_step)
-    fig.suptitle(rf"initial_step. $\mu={mean_initial_step:.03f}$; $\sigma={std_initial_step:.03f}={std_initial_step/mean_initial_step*100:.02f}\%$")
-    ax0 = fig.add_subplot(2, 1, 1)
-    ax1 = fig.add_subplot(2, 1, 2)
-    ax0.plot(prod_step, prod_initial_step, linewidth=1, color="black", alpha=.8)
-    ax0.set_ylabel(r"initial_step")
-    ax0.set_xlabel(r"$step$")
-    ax0.grid()
-    ax1.hist(prod_initial_step[~np.isnan(prod_initial_step)], bins=20, color="black", alpha=.8)
-    ax1.set_xlabel(r"initial_step")
-
-    fig = plt.figure(figsize=(10, 8))
-    mean_parabola_a, std_parabola_a = np.mean(prod_parabola_a), np.std(prod_parabola_a)
-    fig.suptitle(rf"$a = \frac{{1}}{{2}}U''$. $\mu={mean_parabola_a:.02f}$; $\sigma={std_parabola_a:.03f}={std_parabola_a/mean_parabola_a*100:.02f}\%$")
-    ax0 = fig.add_subplot(2, 1, 1)
-    ax1 = fig.add_subplot(2, 1, 2)
-    ax0.plot(prod_step, prod_parabola_a, linewidth=1, color="black", alpha=.8)
-    ax0.set_ylabel(r"$a = \frac{1}{2} U''$")
-    ax0.set_xlabel(r"$step$")
-    ax0.grid()
-    ax1.hist(prod_parabola_a[~np.isnan(prod_parabola_a)], bins=20, color="black", alpha=.8)
-    ax1.set_xlabel(r"$a = \frac{1}{2} U''$")
 
     if "path_u" in nvu_prod_output:
         nblocks, nsaved_per_block, npoints, n = nvu_prod_output["path_u"].shape
