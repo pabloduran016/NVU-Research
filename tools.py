@@ -1,4 +1,5 @@
 from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.gridspec import GridSpec
 import matplotlib.pyplot as plt
 import sys
 import os
@@ -9,6 +10,11 @@ import rumdpy as rp
 import matplotlib.pyplot as plt
 from dataclasses import dataclass, field
 from scipy import stats
+import math
+
+
+FloatArray = npt.NDArray[np.float32]
+IntArray = npt.NDArray[np.int32]
 
 
 __all__ = [
@@ -28,20 +34,19 @@ def run_NVTorNVE(params: "SimulationParameters") -> None:
     if params.initial_conf is None:
         conf = rp.Configuration(D=3)
         conf.make_lattice(rp.unit_cells.FCC, cells=params.cells, rho=params.rho)
-        conf["m"] = 1.0
-        if params.pair_potential_name == "Kob-Andersen":
-            conf.ptype[::5] = 1     # Every fifth particle set to type 1 (4:1 mixture)
-        elif params.pair_potential_name == "ASD":
-            B_particles = range(1, conf.N, 2)
-            conf.ptype[B_particles] = 1  # Setting particle type of B particles
-            conf['m'][B_particles] = params.pair_potential_params["b_mass"]  # Setting masses of B particles
-        if callable(temp_eq):
+        pair_p, ptype, mass = params.get_pair_potential(conf)
+        conf.ptype = ptype
+        conf["m"] = mass
+        if params.vel_temperature is not None:
+            temp0 = params.vel_temperature
+        elif callable(temp_eq):
             temp0 = temp_eq(0)
         else:
             temp0 = temp_eq
         conf.randomize_velocities(T=temp0)
     else:
         conf, _  = load_conf_from_npz(params.initial_conf)
+        pair_p, _ptype, _mass = params.get_pair_potential(conf)
         
     if type(params) == SimulationVsNVT:
         kind = "NVT"
@@ -59,7 +64,7 @@ def run_NVTorNVE(params: "SimulationParameters") -> None:
 
     print(f"========== {kind} EQ ==========")
     sim = rp.Simulation(
-        conf, params.get_pair_potential(conf), integrator_eq,
+        conf, pair_p, integrator_eq,
         num_timeblocks=params.num_timeblocks, steps_per_timeblock=params.steps_per_timeblock,
         storage="memory",
         conf_output="none",
@@ -70,7 +75,7 @@ def run_NVTorNVE(params: "SimulationParameters") -> None:
     print(sim.summary())
     print(f"========== {kind} PROD ==========")
     sim = rp.Simulation(
-        conf, params.get_pair_potential(conf), integrator_prod,
+        conf, pair_p, integrator_prod,
         num_timeblocks=params.num_timeblocks, 
         steps_per_timeblock=params.steps_per_timeblock,
         scalar_output=params.scalar_output,
@@ -87,14 +92,14 @@ def run_NVTorNVE(params: "SimulationParameters") -> None:
     target_u = np.mean(u[len(u)*3//4:])
 
     sim = rp.Simulation(
-        conf, params.get_pair_potential(conf), integrator_prod,
+        conf, pair_p, integrator_prod,
         num_timeblocks=params.num_timeblocks, steps_per_timeblock=params.steps_per_timeblock,
         storage="memory",
         conf_output="none",
         scalar_output="none",  # type: ignore
         verbose=True)
     for block in sim.timeblocks():
-        ev = rp.Evaluater(conf, params.get_pair_potential(conf))
+        ev = rp.Evaluater(conf, pair_p)
         ev.evaluate()
         conf_u = np.sum(conf["u"])
         if conf_u <= target_u:
@@ -135,12 +140,15 @@ def run_NVU_RT(params: "SimulationParameters", do_nvu_eq: bool) -> None:
         debug_print=True,
         mode=params.nvu_params_mode,
         save_path_u=params.nvu_params_save_path_u,
-        raytracing_method=params.nvu_params_raytracing_method
+        raytracing_method=params.nvu_params_raytracing_method,
+        float_type=params.nvu_params_float_type,
     )
+    pair_p, _mass, _ptype = params.get_pair_potential(conf)
+    print(pair_p)
     if do_nvu_eq:
         print("========== NVU EQ ==========")
         sim = rp.Simulation(
-            conf, params.get_pair_potential(conf), integrator,
+            conf, pair_p, integrator,
             num_timeblocks=params.num_timeblocks, 
             steps_per_timeblock=params.steps_per_timeblock,
             storage=params.nvu_eq_output,
@@ -157,7 +165,7 @@ def run_NVU_RT(params: "SimulationParameters", do_nvu_eq: bool) -> None:
 
     print("========== NVU PROD ==========")
     sim = rp.Simulation(
-        conf, params.get_pair_potential(conf), integrator,
+        conf, pair_p, integrator,
         num_timeblocks=params.num_timeblocks, steps_per_timeblock=params.steps_per_timeblock,
         storage=params.nvu_output, 
         scalar_output=params.scalar_output,
@@ -170,7 +178,9 @@ def run_NVU_RT(params: "SimulationParameters", do_nvu_eq: bool) -> None:
 
 
 def save_conf_to_npz(path: str, conf: rp.Configuration, target_u: float) -> None:
-    np.savez(path, r=conf["r"], v=conf["v"], ptype=conf.ptype, target_u=target_u, simbox_initial=conf.simbox.lengths)
+    np.savez(path, r=conf["r"], v=conf["v"], ptype=conf.ptype, 
+             target_u=target_u, simbox_initial=conf.simbox.lengths, 
+             m=conf["m"])
 
 
 def load_conf_from_npz(path: str) -> Tuple[rp.Configuration, float]:
@@ -178,7 +188,7 @@ def load_conf_from_npz(path: str) -> Tuple[rp.Configuration, float]:
     n, d = conf_data["r"].shape
     conf = rp.Configuration(N=n, D=d)
     conf["r"] = conf_data["r"]
-    conf["m"] = 1.0
+    conf["m"] = conf_data.get("m", 1)
     conf["v"] = conf_data["v"]
     conf.ptype = conf_data["ptype"]
     conf.simbox = rp.Simbox(D=d, lengths=conf_data["simbox_initial"])
@@ -197,13 +207,16 @@ class SimulationParameters:
     steps: int
     steps_per_timeblock: int
     scalar_output: int
-    temperature: float | Callable[[float], float]
+
+    vel_temperature: Optional[float] = None
+    temperature: float
     temperature_eq: Optional[float | Callable[[float], float]] = None
+
     initial_conf: Optional[str] = None
 
     cells: List[int]
 
-    pair_potential_name: Literal["LJ", "Kob-Andersen", "ASD"]
+    pair_potential_name: Literal["LJ", "Kob-Andersen", "ASD", "LJ-eps_poly", "LJ-sig_poly"]
     pair_potential_params: Dict[str, Union[npt.NDArray[np.float32], float]]
 
     nvu_params_max_abs_val: float
@@ -216,7 +229,8 @@ class SimulationParameters:
     nvu_params_step: float
     nvu_params_mode: Literal["reflection", "no-inertia"] = "reflection"
     nvu_params_save_path_u: bool = False
-    nvu_params_raytracing_method: Literal["parabola", "parabola-newton", "bisection"] = "bisection"
+    nvu_params_raytracing_method: Literal["parabola", "parabola-newton", "bisection"] = "parabola"
+    nvu_params_float_type: Literal["32", "64"] = "64"
 
     nvu_eq_conf_output = property(lambda self: os.path.join(self.folder, "nvu-rt_eq.npz"))
     nvu_eq_output = property(lambda self: os.path.join(self.folder, "nvu-rt_eq.h5"))
@@ -242,9 +256,14 @@ class SimulationParameters:
 
         self.create_info_file()
 
-    def get_pair_potential(self, configuration: rp.Configuration) -> rp.PairPotential:
-        if self.pair_potential_name == "LJ" or self.pair_potential_name == "Kob-Andersen":
+    def get_pair_potential_params(self) -> Tuple[Union[float, FloatArray], ...]:
+        if self.pair_potential_name == "LJ":
             params = ("sig", "eps", "cut")
+            if set(self.pair_potential_params.keys()) != set(params):
+                raise ValueError(f"Parameters for potential `{self.pair_potential_name}` are {', '.join(params)}, but got {', '.join(self.pair_potential_params.keys())}")
+            param_values = tuple(self.pair_potential_params[name] for name in params)
+        elif self.pair_potential_name == "Kob-Andersen":
+            params = ("sig", "eps")
             if set(self.pair_potential_params.keys()) != set(params):
                 raise ValueError(f"Parameters for potential `{self.pair_potential_name}` are {', '.join(params)}, but got {', '.join(self.pair_potential_params.keys())}")
             if self.pair_potential_name == "Kob-Andersen":
@@ -253,11 +272,41 @@ class SimulationParameters:
                         raise ValueError(f"For potential Kob-Andersen every parameter has to be a (2, 2) numpy array, but got type {type(val)}")
                     if val.shape != (2, 2):
                         raise ValueError(f"For potential Kob-Andersen every parameter has to have shape (2, 2), but got {val.shape} for parameter {name}")
-            pair_f = rp.apply_shifted_force_cutoff(rp.LJ_12_6_sigma_epsilon)
-            param_values = tuple(self.pair_potential_params[name] for name in params)
-            return rp.PairPotential(pair_f, param_values, max_num_nbs=1000)
-        if self.pair_potential_name == "ASD":
-            params = ("sig", "eps", "cut", "bonds", "b_mass")
+            sig = self.pair_potential_params["sig"]
+            cut = 2.5*sig
+            param_values = (sig, self.pair_potential_params["eps"], cut)
+        elif self.pair_potential_name == "LJ-sig_poly":
+            params = ("d_sig", "eps", "ntypes")
+            if set(self.pair_potential_params.keys()) != set(params):
+                raise ValueError(f"Parameters for potential `{self.pair_potential_name}` are {', '.join(params)}, but got {', '.join(self.pair_potential_params.keys())}")
+            if type(self.pair_potential_params["ntypes"]) != int:
+                raise ValueError(f"Parameter `ntype` for potential `{self.pair_potential_name}` has to be of type int")
+            if type(self.pair_potential_params["d_sig"]) != float:
+                raise ValueError(f"Parameter `d_sig` for potential `{self.pair_potential_name}` has to be of type float")
+            ntypes = self.pair_potential_params["ntypes"]
+            d_sig = self.pair_potential_params["d_sig"]
+            sig_pp = calculate_per_particle_poly(ntypes, d_sig)
+            sig = np.add.outer(sig_pp, sig_pp) / 2
+            eps = np.ones((ntypes, ntypes), dtype=np.float32)
+            cut = np.array(sig)*2.5
+            param_values = (sig, eps, cut)
+        elif self.pair_potential_name == "LJ-eps_poly":
+            params = ("sig", "d_eps", "ntypes")
+            if set(self.pair_potential_params.keys()) != set(params):
+                raise ValueError(f"Parameters for potential `{self.pair_potential_name}` are {', '.join(params)}, but got {', '.join(self.pair_potential_params.keys())}")
+            if type(self.pair_potential_params["ntypes"]) != int:
+                raise ValueError(f"Parameter `ntype` for potential `{self.pair_potential_name}` has to be of type int")
+            if type(self.pair_potential_params["d_eps"]) != float:
+                raise ValueError(f"Parameter `d_eps` for potential `{self.pair_potential_name}` has to be of type float")
+            ntypes = self.pair_potential_params["ntypes"]
+            d_eps = self.pair_potential_params["d_eps"]
+            eps_pp = calculate_per_particle_poly(ntypes, d_eps)
+            eps = np.sqrt(np.outer(eps_pp, eps_pp))
+            sig = np.ones((ntypes, ntypes), dtype=np.float32)
+            cut = np.array(sig)*2.5
+            param_values = (sig, eps, cut)
+        elif self.pair_potential_name == "ASD":
+            params = ("sig", "eps", "bonds", "b_mass")
             if set(self.pair_potential_params.keys()) != set(params):
                 raise ValueError(f"Parameters for potential `{self.pair_potential_name}` are {', '.join(params)}, but got {', '.join(self.pair_potential_params.keys())}")
             for name, val in self.pair_potential_params.items():
@@ -275,17 +324,44 @@ class SimulationParameters:
                         raise ValueError(f"For potential ASD parameter {name} has to have shape (1, 2), but got {val.shape} for parameter {name}")
                 else:
                     assert False, "Unreachable"
+            sig = self.pair_potential_params["sig"]
+            cut = 2.5 * sig
+            param_values = (self.pair_potential_params["sig"], self.pair_potential_params["eps"], cut)
+        else:
+            raise ValueError(f"Unknown potential name `{self.pair_potential_name}`")
+        return param_values
 
+    def get_pair_potential(
+        self, configuration: rp.Configuration
+    ) -> Tuple[Union[rp.PairPotential, List[Union[rp.PairPotential, rp.Bonds]]], IntArray, FloatArray]:
+        mass = np.zeros(configuration.N, dtype=configuration.ftype)
+        mass[:] = 1
+        ptype = np.zeros(configuration.N, dtype=configuration.itype)
+        param_values = self.get_pair_potential_params()
+        if self.pair_potential_name == "LJ" or self.pair_potential_name == "Kob-Andersen":
+            pair_f = rp.apply_shifted_force_cutoff(rp.LJ_12_6_sigma_epsilon)
+            if self.pair_potential_name == "Kob-Andersen":
+                ptype[::5] = 1     # Every fifth particle set to type 1 (4:1 mixture)
+            return rp.PairPotential(pair_f, param_values, max_num_nbs=1000), ptype, mass
+        elif self.pair_potential_name in ("LJ-eps_poly", "LJ-sig_poly"):
+            pair_f = rp.apply_shifted_force_cutoff(rp.LJ_12_6_sigma_epsilon)
+            ntypes: int = self.pair_potential_params["ntypes"]  # type: ignore
+            part_types = np.arange(ntypes, dtype=int)
+            ptype = np.repeat(part_types, configuration.N//ntypes)
+            return rp.PairPotential(pair_f, param_values, max_num_nbs=1000), ptype, mass
+        elif self.pair_potential_name == "ASD":
             bond_potential = rp.harmonic_bond_function
             bond_params = self.pair_potential_params["bonds"]
             bond_indices = [[i, i + 1, 0] for i in range(0, configuration.N - 1, 2)]  # dumbells: i(even) and i+1 bonded with type 0
             bonds = rp.Bonds(bond_potential, bond_params, bond_indices)
             pair_f = rp.apply_shifted_force_cutoff(rp.LJ_12_6_sigma_epsilon)
             exclusions = bonds.get_exclusions(configuration)
-            param_values = tuple(self.pair_potential_params[name] for name in ("sig", "eps", "cut"))
-            return rp.PairPotential(pair_f, param_values, exclusions=exclusions, max_num_nbs=1000)
+            B_particles = range(1, configuration.N, 2)
+            ptype[B_particles] = 1  # Setting particle type of B particles
+            mass[B_particles] = self.pair_potential_params["b_mass"]  # Setting masses of B particles
+            return [rp.PairPotential(pair_f, param_values, exclusions=exclusions, max_num_nbs=1000), bonds], ptype, mass
         else:
-            raise ValueError(f"Unknwon potential name `{self.pair_potential_name}`")
+            raise ValueError(f"Unknown potential name `{self.pair_potential_name}`")
 
     def create_info_file(self) -> None:
         with open(self.info_output, "w") as f:
@@ -320,6 +396,7 @@ class SimulationParameters:
             ("step", self.nvu_params_step),
             ("mode", self.nvu_params_mode),
             ("raytracing_method", self.nvu_params_raytracing_method),
+            ("float_type", self.nvu_params_float_type),
         ):
             info += f"{name} = {val}\n"
         return info
@@ -380,7 +457,7 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     _, _, _, n, d = other_prod_output["block"].shape
 
     other_u, other_k, = rp.extract_scalars(other_prod_output, ["U", "K"], first_block=0, D=d)
-    _conf, target_u = load_conf_from_npz(params.nvu_eq_conf_output)
+    nvu_eq_conf, target_u = load_conf_from_npz(params.nvu_eq_conf_output)
     other_du_rel = (other_u - target_u) / abs(target_u)
 
     fig = plt.figure(figsize=(10, 8))
@@ -388,8 +465,8 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax0 = fig.add_subplot(2, 1, 1)
     ax1 = fig.add_subplot(2, 1, 2)
 
-    prod_step = np.arange(len(other_u)) * other_prod_output["steps_between_output"]
-    ax0.plot(prod_step, other_du_rel, linewidth=1, alpha=.8, color="black")
+    other_step = np.arange(len(other_u)) * other_prod_output.attrs["steps_between_output"]
+    ax0.plot(other_step, other_du_rel, linewidth=1, alpha=.8, color="black")
     ax0.set_xlabel("steps")
     ax0.set_ylabel(r"$\frac{U - U_0}{|U_0|}$")
     ax0.grid()
@@ -403,7 +480,7 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax = fig.add_subplot()
     dof = d * n - d  # degrees of freedom
     temp = 2 * other_k / dof
-    ax.plot(prod_step, temp, linewidth=1, alpha=.8, color="black")
+    ax.plot(other_step, temp, linewidth=1, alpha=.8, color="black")
     ax.grid()
 
     if not os.path.exists(params.nvu_output):
@@ -412,10 +489,12 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
 
     nvu_prod_output = rp.tools.load_output(params.nvu_output)
     nvu_eq_output = rp.tools.load_output(params.nvu_eq_output)
+    nblocks, _, _, _, _ = nvu_prod_output["block"].shape
 
     nvu_prod_u, prod_dt, prod_its, prod_fsq, prod_lap, prod_cos_v_f, prod_time, = \
         rp.extract_scalars(nvu_prod_output, ["U", "dt", "its", "Fsq", "lapU", "cos_v_f", "time", ], 
                            integrator_outputs=rp.integrators.NVU_RT.outputs)
+    prod_step = np.arange(len(nvu_prod_u)) * nvu_prod_output.attrs["steps_between_output"]
     prod_cos_v_f[prod_cos_v_f > 1] = 1
     prod_cos_v_f[prod_cos_v_f < -1] = -1
     prod_correction = (np.pi / 2 - np.arccos(prod_cos_v_f)) / prod_cos_v_f
@@ -434,29 +513,96 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax1.set_xlabel(r"$\frac{U - U_0}{|U_0|}$")
     ax1.grid()
 
-    other_rdf = calculate_rdf(other_prod_output)
-    nvu_rdf = calculate_rdf(nvu_prod_output)
+    rdf_ptype = None
+    if params.pair_potential_name in ("LJ-eps_poly", "LJ-sig_poly"):
+        ntypes: int = params.pair_potential_params["ntypes"]  # type: ignore
+        delta: float
+        if params.pair_potential_name == "LJ-eps_poly":
+            delta = params.pair_potential_params["d_eps"]  # type: ignore
+        elif params.pair_potential_name == "LJ-sig_poly":
+            delta = params.pair_potential_params["d_sig"]  # type: ignore
+        else:
+            assert False, "Unreachable"
+        poly = calculate_per_particle_poly(ntypes, delta)
+        poly_0, poly_f = np.min(poly), np.max(poly)
+        num_divisions = 4
+        _, old_ptype, _ = params.get_pair_potential(nvu_eq_conf)
+        for i in range(ntypes):
+            # You have to add a 1e-6 to make floor contain also the boundary
+            if poly_f == poly_0:
+                new_ptype = 0
+            else:
+                new_ptype = max(int(np.floor((poly[i] - poly_0) / (poly_f - poly_0) * num_divisions - 1e-6)), 0)
+            old_ptype[old_ptype == i] = new_ptype
+        rdf_ptype = old_ptype
+
+    conf_per_block = math.floor(512 / nblocks)
+    other_rdf = calculate_rdf(other_prod_output, conf_per_block, ptype=rdf_ptype)
+    nvu_rdf = calculate_rdf(nvu_prod_output, conf_per_block, ptype=rdf_ptype)
 
     fig = plt.figure(figsize=(10, 8))
-    ax = fig.add_subplot()
     fig.suptitle("$g(r)$")
-    ax.plot(other_rdf['distances'], np.mean(other_rdf['rdf'], axis=0), linewidth=1, color="black", alpha=.8, label=kind)
-    ax.plot(nvu_rdf['distances'], np.mean(nvu_rdf['rdf'], axis=0), linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="blue", alpha=.8, label="NVU")
+    ax = fig.add_subplot()
+    # total_other_rdf = other_rdf['rdf']
+    # total_nvu_rdf = nvu_rdf['rdf']
+    # ax.plot(other_rdf['distances'], np.mean(total_other_rdf, axis=0), linewidth=1, color="black", alpha=.8, label=kind)
+    # ax.plot(nvu_rdf['distances'], np.mean(total_nvu_rdf, axis=0), linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="blue", alpha=.8, label="NVU")
+    ax.plot(other_rdf['distances'], np.mean(other_rdf["rdf"], axis=0), linewidth=1, color="black", alpha=.8, label=kind)
+    ax.plot(nvu_rdf['distances'], np.mean(nvu_rdf["rdf"], axis=0), linewidth=0, marker='.', markersize=5, markeredgewidth=0, 
+            alpha=.8, label=f"NVU")
+
+    nptypes = nvu_rdf["rdf_ptype"].shape[1]
+    for i in range(nptypes):
+        for j in range(nptypes):
+            if i != j and nptypes > 2:
+                continue
+            if j > i:
+                break
+            other_rdf_ij = other_rdf['rdf_ptype'][:, i, j, :]
+            nvu_rdf_ij = nvu_rdf['rdf_ptype'][:, i, j, :]
+            ax.plot(other_rdf['distances'], np.mean(other_rdf_ij, axis=0), linewidth=1, color="black", alpha=.8)
+            ax.plot(nvu_rdf['distances'], np.mean(nvu_rdf_ij, axis=0), linewidth=0, marker='.', markersize=5, markeredgewidth=0, 
+                    alpha=.8, label=f"NVU {i}-{j}")
     ax.grid()
     ax.legend()
     ax.set_xlabel(r"$r$")
     ax.set_ylabel(r"$g(r)$")
 
-    nvu_msd = rp.tools.calc_dynamics(nvu_prod_output, first_block=0)["msd"][:, 0]
-    other_msd = rp.tools.calc_dynamics(other_prod_output, first_block=0)["msd"][:, 0]
-    nvu_time = np.mean(prod_dt) * 2 ** np.arange(len(nvu_msd))
-    other_time = other_prod_output["attrs"]['dt'] * 2 ** np.arange(len(other_msd))
+    nvu_msd = rp.tools.calc_dynamics(nvu_prod_output, first_block=0)["msd"]
+    other_msd = rp.tools.calc_dynamics(other_prod_output, first_block=0)["msd"]
+    if params.pair_potential_name in ("LJ-eps_poly", "LJ-sig_poly"):
+        nvu_msd = rp.tools.calc_dynamics(nvu_prod_output, first_block=0)["msd"].mean(axis=1)[:, np.newaxis]
+        other_msd = rp.tools.calc_dynamics(other_prod_output, first_block=0)["msd"].mean(axis=1)[:, np.newaxis]
 
+    n_msd, n_ptype = nvu_msd.shape
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot()
     fig.suptitle("MSD")
-    ax.loglog(other_time, other_msd, linewidth=1, color="black", alpha=.8, label=kind)
-    ax.loglog(nvu_time, nvu_msd, linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="blue", alpha=.8, label="NVU")
+    for i in range(n_ptype):
+        other_time = other_prod_output.attrs['dt'] * 2 ** np.arange(n_msd)
+        nvu_time = np.mean(prod_dt) * 2 ** np.arange(n_msd)
+
+        ax.loglog(other_time, other_msd[:, i], linewidth=1, color="black", alpha=.8, label=f"{kind} {i}")
+        ax.loglog(nvu_time, nvu_msd[:, i], linewidth=0, marker='.', markersize=5, markeredgewidth=0, alpha=.8, label=f"NVU {i}")
+    ax.grid()
+    ax.legend()
+    ax.set_xlabel(r"$t$")
+    ax.set_ylabel(r"$MSD$")
+
+    n_msd, n_ptype = nvu_msd.shape
+    fig = plt.figure(figsize=(10, 8))
+    fig.suptitle("MSD using ballistic regime to calculate time")
+    ax = fig.add_subplot()
+    for i in range(n_ptype):
+        other_time = other_prod_output.attrs['dt'] * 2 ** np.arange(n_msd)
+        ax.loglog(other_time, other_msd[:, i], linewidth=1, color="black", alpha=.8, label=f"{kind} {i}")
+        kb = 1
+        mass = 1
+        if params.pair_potential_name == "ASD" and i == 1:
+            mass = params.pair_potential_params["b_mass"]
+        prod_beta = np.sqrt(mass * nvu_msd[0, i] / (3 * kb * params.temperature))
+        beta_nvu_time = prod_beta * 2 ** np.arange(n_msd)
+        ax.loglog(beta_nvu_time, nvu_msd[:, i], linewidth=0, marker='.', markersize=5, markeredgewidth=0, alpha=.8, label=f"NVU {i}")
     ax.grid()
     ax.legend()
     ax.set_xlabel(r"$t$")
@@ -464,6 +610,7 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
 
     nblocks, nconfs, _, _, _ = nvu_prod_output["block"].shape
     step_conf = np.concatenate([params.steps_per_timeblock * i + 2 ** np.concatenate([[0], np.arange(nconfs-1)]) for i in range(nblocks)])
+
     fig = plt.figure(figsize=(10, 8))
     fig.suptitle("Time NVU")
     ax = fig.add_subplot()
@@ -471,7 +618,7 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     xs = np.linspace(np.min(prod_step), np.max(prod_step))
     ax.plot(xs, xs * res.slope + res.intercept, ':', color="red", alpha=.5, label=rf"m = {res.slope}")  # type: ignore
     ax.plot(prod_step, prod_time, '--', color="black", alpha=.5, label="scalar time")
-    ax.plot(step_conf, nvu_prod_output["time"].flatten(), linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="blue", alpha=.5, label="conf time")
+    ax.plot(step_conf, nvu_prod_output["time"][:].flatten(), linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="blue", alpha=.5, label="conf time")
     ax.grid()
     ax.legend()
     ax.set_title(r"$t(step)$")
@@ -512,8 +659,8 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax1.grid()
 
     if "path_u" in nvu_prod_output:
-        nblocks, nsaved_per_block, npoints, n = nvu_prod_output["path_u"].shape
-        path_u = nvu_prod_output["path_u"].reshape(nblocks*nsaved_per_block, npoints, n)
+        nblocks, nsaved_per_block, npoints, n = nvu_prod_output["path_u"][:].shape
+        path_u = nvu_prod_output["path_u"][:].reshape(nblocks*nsaved_per_block, npoints, n)
         xs = path_u[:, :, 0].T  # (npoints, npaths)
         ys = path_u[:, :, 1].T  # (npoints, npaths)
         # Harmonic approximation:
@@ -614,7 +761,7 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
                            integrator_outputs=rp.integrators.NVU_RT.outputs, first_block=1)
     eq_cos_v_f[eq_cos_v_f > 1] = 1
     eq_cos_v_f[eq_cos_v_f < 1] = -1
-    eq_step = np.arange(len(nvu_eq_u)) * nvu_eq_output["steps_between_output"]
+    eq_step = np.arange(len(nvu_eq_u)) * nvu_eq_output.attrs["steps_between_output"]
 
     nvu_eq_du_rel = (nvu_eq_u - target_u) / abs(target_u)
     fig = plt.figure(figsize=(10, 10))
@@ -758,21 +905,21 @@ def get_cov(x: npt.NDArray[np.float32], y: npt.NDArray[np.float32]) -> npt.NDArr
     return c
 
 
-def calculate_rdf(output: dict[str, Any]) -> dict[str, Any]:
-    _, _, _, n, d = output["block"].shape
+def calculate_rdf(output: dict[str, Any], conf_per_block: int, ptype: Optional[IntArray] = None, ) -> dict[str, Any]:
+    _, nconf, _, n, d = output["block"].shape
     positions = output["block"][:, :, 0, :, :]
     conf = rp.Configuration(D=d, N=n)
     conf['m'] = 1
-    conf.ptype = output["ptype"]
-    conf.simbox = rp.Simbox(D=d, lengths=output["attrs"]["simbox_initial"])
-    cal_rdf = rp.CalculatorRadialDistribution(conf, num_bins=1000)
+    conf.ptype = output["ptype"] if ptype is None else ptype
+    conf.simbox = rp.Simbox(D=d, lengths=output.attrs["simbox_initial"])
+    cal_rdf = rp.CalculatorRadialDistribution(conf, num_bins=500)
     for i in range(positions.shape[0]):
-        pos = positions[i, -1, :, :]
-        conf["r"] = pos
-        conf.copy_to_device()
-        cal_rdf.update()
-
-    cal_rdf.save_average()
+        for j in range(conf_per_block):
+            k = math.floor(j * nconf / conf_per_block)
+            pos = positions[i, k, :, :]
+            conf["r"] = pos
+            conf.copy_to_device()
+            cal_rdf.update()
     rdf = cal_rdf.read()
     return rdf
 
@@ -791,4 +938,10 @@ def save_current_figures_to_pdf(path0: str):
     for fig in figs:
         fig.savefig(pages, format='pdf')  # type: ignore
     pages.close()
+
+
+def calculate_per_particle_poly(ntypes: int, delta: float) -> FloatArray:
+    part_types = np.arange(ntypes, dtype=int)
+    delta_pp = (part_types / (ntypes - 1) * 2 - 1) * delta + 1
+    return delta_pp
 

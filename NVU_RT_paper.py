@@ -4,11 +4,9 @@
 #PBS -o out/$PBS_JOBNAME.out
 #PBS -j oe
 
+import math
 import os
 import sys
-
-from matplotlib import gridspec
-from matplotlib.ticker import AutoMinorLocator, Locator, LogLocator
 
 # if running as batch job need to explicitly change to the correct directory
 if 'PBS_O_WORKDIR' in os.environ:
@@ -28,9 +26,8 @@ import rumdpy as rp
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, Set, Tuple, Optional, Union
-from tools import KNOWN_SIMULATIONS, SimulationParameters, SimulationVsNVE, SimulationVsNVT, \
-    load_conf_from_npz, plot_nvu_vs_figures, run_NVTorNVE, run_NVU_RT, \
-    save_current_figures_to_pdf
+from tools import KNOWN_SIMULATIONS, SimulationParameters, SimulationVsNVE, SimulationVsNVT, calculate_rdf, \
+    load_conf_from_npz
 import numpy as np
 import numpy.typing as npt
 
@@ -60,6 +57,8 @@ def scientific_notation(v: Union[float, np.float32], n: int) -> str:
 
 
 def get_output(params: SimulationParameters, rdf_new: bool) -> Output:
+    if params.name in USE_BACKUP:
+        params = USE_BACKUP[params.name]
     params.init()
 
     if type(params) == SimulationVsNVT:
@@ -85,14 +84,15 @@ def get_output(params: SimulationParameters, rdf_new: bool) -> Output:
     print(f"Loading NVU PROD output from path `{params.nvu_output}`")
     nvu_prod_output = rp.tools.load_output(params.nvu_output)
 
+    conf_per_block = math.floor(512 / nvu_prod_output["block"].shape[0])
     if rdf_new or not os.path.exists(params.other_prod_rdf):
-        other_prod_rdf = get_rdf(other_prod_output)
+        other_prod_rdf = calculate_rdf(other_prod_output, conf_per_block)
         np.savez(params.other_prod_rdf, **other_prod_rdf)
     else:
         other_prod_rdf = np.load(params.other_prod_rdf)
 
     if rdf_new or not os.path.exists(params.nvu_prod_rdf):
-        prod_rdf = get_rdf(nvu_prod_output)
+        prod_rdf = calculate_rdf(nvu_prod_output, conf_per_block)
         np.savez(params.nvu_prod_rdf, **prod_rdf)
     else:
         prod_rdf = np.load(params.nvu_prod_rdf)
@@ -109,6 +109,12 @@ def get_output(params: SimulationParameters, rdf_new: bool) -> Output:
     )
 
 
+def get_delta_time_from_msd(msd: FloatArray, temperature: float, mass: float = 1) -> FloatArray:
+    kb = 1
+    beta = np.sqrt(mass * msd[0] / (3 * kb * temperature))
+    return beta
+
+
 def get_delta_time(output: Dict[str, Any]) -> FloatArray:
     dt0, cos_v_f, = rp.extract_scalars(output, ["dt", "cos_v_f", ], 
         integrator_outputs=rp.integrators.NVU_RT.outputs)
@@ -120,38 +126,20 @@ def get_delta_time(output: Dict[str, Any]) -> FloatArray:
 
 def get_steps(output: Dict[str, Any]) -> FloatArray:
     nblocks, nscalar_per_block, _nscalars = output["scalars"].shape
-    steps = np.arange(nblocks * nscalar_per_block) * output["steps_between_output"]
+    steps = np.arange(nblocks * nscalar_per_block) * output.attrs["steps_between_output"]
     return steps
 
 
 def get_path_u(output: Dict[str, Any]) -> Tuple[FloatArray, FloatArray]:
     nblocks, npaths_per_block, npoints, n = output["path_u"].shape
-    data = output["path_u"].reshape(nblocks * npaths_per_block, npoints, n)
+    data = output["path_u"][:].reshape(nblocks * npaths_per_block, npoints, n)
     xs = data[:, :, 0].T
     ys = data[:, :, 1].T
     return xs, ys
 
 
 def get_msd(output: Dict[str, Any]) -> FloatArray:
-    return rp.tools.calc_dynamics(output, first_block=0)["msd"][:, 0]
-
-
-def get_rdf(output: Dict[str, Any]) -> Dict[str, FloatArray]:
-    _, _, _, n, d = output["block"].shape
-    positions = output["block"][:, :, 0, :, :]
-    conf = rp.Configuration(D=d, N=n)
-    conf['m'] = 1
-    conf.ptype = output["ptype"]
-    conf.simbox = rp.Simbox(D=d, lengths=output["attrs"]["simbox_initial"])
-    cal_rdf = rp.CalculatorRadialDistribution(conf, num_bins=1000)
-    for i in range(positions.shape[0]):
-        pos = positions[i, -1, :, :]
-        conf["r"] = pos
-        conf.copy_to_device()
-        cal_rdf.update()
-
-    rdf = cal_rdf.read()
-    return rdf
+    return rp.tools.calc_dynamics(output, first_block=0)["msd"]
 
 
 def method(rdf_new: Set[str], rdf_all: bool) -> None:
@@ -174,9 +162,11 @@ def method(rdf_new: Set[str], rdf_all: bool) -> None:
     n1_dt_raw, = rp.extract_scalars(output_n1.prod_output, ["dt"], integrator_outputs=rp.integrators.NVU_RT.outputs)
     n2_dt_raw, = rp.extract_scalars(output_n2.prod_output, ["dt"], integrator_outputs=rp.integrators.NVU_RT.outputs)
 
-    fig = plt.figure(figsize=(8, 8))
+    fig = plt.figure(figsize=(10, 8))
     # fig.suptitle(r"Correction to $\Delta t$ to account for curvature fo the surface")
-    gs = GridSpec(3, 2, width_ratios=[1, 0.5], hspace=.3, wspace=0)
+    gs = GridSpec(3, 2, width_ratios=[1, 0.5], hspace=.6, wspace=0)
+    fig.text(1.0, 0.5, r"$\frac{\alpha}{\sin\alpha} - 1 = \frac{\Delta t}{\Delta t_{not\,corrected}} - 1$", 
+             va='center', rotation=90, fontsize="x-large")
     for (i, steps, dt, dt_raw, n) in zip(
         range(3), 
         (n0_steps, n1_steps, n2_steps), 
@@ -197,14 +187,14 @@ def method(rdf_new: Set[str], rdf_all: bool) -> None:
         ax1 = fig.add_subplot(gs[i, 1])
         ax1.hist(dt/dt_raw - 1, orientation="horizontal", density=True, color="black", alpha=0.8)
         ax1.set_xlabel(r"Probability")
-        ax1.set_ylabel(r"$\frac{\alpha}{\sin\alpha} - 1 = \frac{\Delta t}{\Delta t_{not\,corrected}} - 1$")
         ax1.yaxis.set_label_position("right")
         ax1.yaxis.tick_right()
         ax1.grid(alpha=0.5)
+
     fig.savefig(FIG_DT_CORRECTION)
     plt.close(fig)
 
-    fig = plt.figure(figsize=(4, 3))
+    fig = plt.figure(figsize=(8, 3))
     ax = fig.add_subplot()
     ax.plot(n0_steps, n0_dt, linewidth=1, color="#BBB", alpha=0.8, label=rf"$N = {n0}$")
     ax.plot(n1_steps, n1_dt, linewidth=1, color="#555", alpha=0.8, label=rf"$N = {n1}$")
@@ -216,7 +206,7 @@ def method(rdf_new: Set[str], rdf_all: bool) -> None:
     fig.savefig(FIG_DT_OVER_STEPS)
     plt.close(fig)
 
-    fig = plt.figure(figsize=(4, 3))
+    fig = plt.figure(figsize=(8, 3))
     ax = fig.add_subplot()
     d_time_sq0 = n0_dt**2 - (n0_dt**2).mean()
     d_time_sq1 = n1_dt**2 - (n1_dt**2).mean()
@@ -264,6 +254,22 @@ def method(rdf_new: Set[str], rdf_all: bool) -> None:
     fig.savefig(FIG_PARABOLAS_RELATIVE_ERROR)
     plt.close(fig)
 
+    a = p[0, :]
+    b = p[1, :]
+    fig = plt.figure(figsize=(8, 3))
+    gs = GridSpec(1, 2)
+    ax0 = fig.add_subplot(gs[0])
+    ax0.hist(a, density=True, bins=30, color="black", alpha=0.8)
+    ax0.set_xlabel("$a$")
+    ax0.set_ylabel("$p(a)$")
+    ax1 = fig.add_subplot(gs[1])
+    ax1.hist(b, density=True, bins=30, color="black", alpha=0.8)
+    ax1.set_xlabel("$b$")
+    ax1.set_ylabel("$p(b)$")
+    fig.savefig(FIG_PARABOLAS_AB)
+    plt.close(fig)
+
+
     indices = np.argsort(np.abs(ys).max(axis=0))[::-1][[0, ys.shape[1]//4, ys.shape[1]*2//3, -1]]
     # print(indices, np.abs(ys).max(axis=0)[indices])
     fig = plt.figure(figsize=(8, 3))
@@ -302,8 +308,33 @@ def lennard_jones(rdf_new: Set[str], rdf_all: bool) -> None:
     output_b = get_output(LJ_B, rdf_new=LJ_B.name in rdf_new or rdf_all)
     output_c = get_output(LJ_C, rdf_new=LJ_C.name in rdf_new or rdf_all)
 
-    fig = plt.figure(figsize=(8, 6))
-    gs = GridSpec(2, 4, wspace=.6, hspace=.2)
+    fsq, lap = rp.extract_scalars(output_a.prod_output, ["Fsq", "lapU"])
+    steps = get_steps(output_a.prod_output)
+    t_conf = fsq / lap
+    sig = np.std(t_conf)
+    mu = np.mean(t_conf)
+    n = len(t_conf) // 1000
+    fig = plt.figure(figsize=(8, 4))
+    ax = fig.add_subplot()
+    ax.plot(steps[::n], t_conf[::n], linewidth=1, alpha=.8, color="black")
+    t = ax.annotate(
+        rf"$\mu(T_{{conf}}) = {mu:.02f}$""\n" 
+        rf"$\sigma(T_{{conf}}) = {sig:.03f}$",
+        (0.1, 0.90), xycoords="axes fraction", verticalalignment="top")
+    t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
+    t = ax.annotate(
+        rf"temperature = ${LJ_A.temperature:.02f}$""\n"
+        rf"$\rho$ = ${LJ_A.rho}$", 
+        (0.3, 0.90), xycoords="axes fraction", verticalalignment="top")
+    t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
+    ax.grid(alpha=.3)
+    ax.set_ylim(2, 2.8)
+    ax.set_xlabel("steps")
+    ax.set_ylabel(r"$T_{conf} = \dfrac{|\nabla U|^2}{\nabla^2 U}$")
+    fig.savefig(FIG_LJ_TCONF)
+
+    fig = plt.figure(figsize=(10, 7))
+    gs = GridSpec(2, 4, wspace=.7, hspace=.2)
     ax_a = fig.add_subplot(gs[0, 0:2])
     ax_b = fig.add_subplot(gs[0, 2:4])
     ax_c = fig.add_subplot(gs[1, 1:3])
@@ -323,7 +354,7 @@ def lennard_jones(rdf_new: Set[str], rdf_all: bool) -> None:
         t = ax.annotate(
             rf"temperature = ${params.temperature}$""\n"
             rf"$\rho$ = ${params.rho}$", 
-            (0.4, 0.60), xycoords="axes fraction")
+            (0.4, 0.55), xycoords="axes fraction")
         t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
         ax.grid(alpha=.3)
         ax.legend()
@@ -331,8 +362,8 @@ def lennard_jones(rdf_new: Set[str], rdf_all: bool) -> None:
         ax.set_ylabel("$g(r)$")
     fig.savefig(FIG_LJ_RDF)
 
-    fig = plt.figure(figsize=(8, 6))
-    gs = GridSpec(2, 4, wspace=.6, hspace=.2)
+    fig = plt.figure(figsize=(10, 7))
+    gs = GridSpec(2, 4, wspace=.7, hspace=.2)
     ax_a = fig.add_subplot(gs[0, 0:2])
     ax_b = fig.add_subplot(gs[0, 2:4], sharex=ax_a, sharey=ax_a)
     ax_c = fig.add_subplot(gs[1, 1:3], sharex=ax_a, sharey=ax_a)
@@ -341,11 +372,11 @@ def lennard_jones(rdf_new: Set[str], rdf_all: bool) -> None:
         (ax_b, output_b, LJ_B),
         (ax_c, output_c, LJ_C)
     ):
-        msd = get_msd(output.prod_output)
-        dt = get_delta_time(output.prod_output)
-        time = np.mean(dt) * 2 ** np.arange(len(msd))
+        msd = get_msd(output.prod_output)[:, 0]
+        dt = get_delta_time_from_msd(msd, params.temperature)
+        time = dt * 2 ** np.arange(len(msd))
 
-        other_msd = get_msd(output.other_prod_output)
+        other_msd = get_msd(output.other_prod_output)[:, 0]
         other_time = params.dt * 2 ** np.arange(len(other_msd))
 
         ax.loglog(other_time, other_msd, linewidth=1, color="black", label="NVT")
@@ -357,7 +388,7 @@ def lennard_jones(rdf_new: Set[str], rdf_all: bool) -> None:
             rf"$\rho$ = ${params.rho}$", 
             (0.5, 0.15), xycoords="axes fraction")
         t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
-        ax.set_ylabel(r"$\langle r^2 \rangle - \langle r \rangle^2$")
+        ax.set_ylabel(r"$\langle \Delta r^2 \rangle$")
         ax.set_xlabel("$t$")
         ax.legend()
         ax.grid(alpha=.3)
@@ -366,12 +397,11 @@ def lennard_jones(rdf_new: Set[str], rdf_all: bool) -> None:
 
 def kob_andersen(rdf_new: Set[str], rdf_all: bool) -> None:
     outputs = [
-        get_output(
-            (params if params.name not in USE_BACKUP else USE_BACKUP[params.name]), rdf_new=params.name in rdf_new or rdf_all)
+        get_output(params, rdf_new=params.name in rdf_new or rdf_all)
         for params in KA_PARAMS
     ]
 
-    fig = plt.figure(figsize=(4, 6))
+    fig = plt.figure(figsize=(8, 8))
     gs = GridSpec(2, 1, wspace=.5, hspace=.2)
     ax_a = fig.add_subplot(gs[0])
     ax_b = fig.add_subplot(gs[1])
@@ -379,13 +409,28 @@ def kob_andersen(rdf_new: Set[str], rdf_all: bool) -> None:
         (ax_a, outputs[0], KA_PARAMS[0]),
         (ax_b, outputs[-1], KA_PARAMS[-1]),
     ):
-        rdf = np.mean(output.prod_rdf["rdf"], axis=0)[::10]
-        distances = output.prod_rdf["distances"][::10]
+        n = len(output.prod_rdf["distances"]) // 80
+        distances = output.prod_rdf["distances"][::n]
         other_rdf = np.mean(output.other_prod_rdf["rdf"], axis=0)
+        rdf = np.mean(output.prod_rdf["rdf"], axis=0)[::n]
         ax.plot(output.other_prod_rdf["distances"], other_rdf, linewidth=1, color="black", label="NVT")
+        for i in range(output.prod_rdf["rdf_ptype"].shape[1]):
+            for j in range(output.prod_rdf["rdf_ptype"].shape[2]):
+                if j > i:
+                    break
+                other_rdf_ij = np.mean(output.other_prod_rdf["rdf_ptype"][:, i, j, :], axis=0)
+                ax.plot(output.other_prod_rdf["distances"], other_rdf_ij, linewidth=1, color="black", alpha=.8)
         ax.plot(distances, rdf, marker='.', linewidth=0, 
-            markeredgewidth=1, markersize=9, markeredgecolor="black",
-            color="red", alpha=.9, label="NVU_RT")
+                markeredgewidth=1, markersize=9, markeredgecolor="black",
+                color="red", alpha=.9, label="NVU RT")
+        for i in range(output.prod_rdf["rdf_ptype"].shape[1]):
+            for j in range(output.prod_rdf["rdf_ptype"].shape[2]):
+                if j > i:
+                    break
+                rdf_ij = np.mean(output.prod_rdf["rdf_ptype"][:, i, j, :], axis=0)[::n]
+                ax.plot(distances, rdf_ij, marker='.', linewidth=0, 
+                        markeredgewidth=1, markersize=9, markeredgecolor="black",
+                        alpha=.9, label=f"NVU RT {['A', 'B'][j]}-{['A', 'B'][i]}")
         t = ax.annotate(
             rf"temperature = ${params.temperature}$",
             (0.4, 0.62), xycoords="axes fraction")
@@ -396,16 +441,16 @@ def kob_andersen(rdf_new: Set[str], rdf_all: bool) -> None:
         ax.set_ylabel("$g(r)$")
     fig.savefig(FIG_KA_RDF)
 
-    fig = plt.figure(figsize=(4, 3))
+    fig = plt.figure(figsize=(8, 6))
     gs = GridSpec(3, 3, wspace=.5, hspace=.2)
     ax = fig.add_subplot()
     for i, (output, params) in enumerate(zip(outputs, KA_PARAMS)):
         # ax = fig.add_subplot(gs[i])
-        msd = get_msd(output.prod_output)
-        dt = get_delta_time(output.prod_output)
+        msd = get_msd(output.prod_output)[:, 0]
+        dt = get_delta_time_from_msd(msd, params.temperature)
         time = np.mean(dt) * 2 ** np.arange(len(msd))
 
-        other_msd = get_msd(output.other_prod_output)
+        other_msd = get_msd(output.other_prod_output)[:, 0]
         other_time = params.dt * 2 ** np.arange(len(other_msd))
 
         line0, = ax.loglog(other_time, other_msd, linewidth=1, color="black")
@@ -414,15 +459,80 @@ def kob_andersen(rdf_new: Set[str], rdf_all: bool) -> None:
                            color="red", alpha=.9)
         if i == 0:
             line0.set_label("NVT")
-            line1.set_label("NVU_RT")
+            line1.set_label("NVU RT")
             t = ax.annotate(rf"temperature = ${params.temperature:.03f}$", (0.2, 0.62), xycoords="axes fraction")
             t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
         if i == len(outputs) - 1:
-            t = ax.annotate(rf"temperature = ${params.temperature:.03f}$", (0.4, 0.32), xycoords="axes fraction")
+            t = ax.annotate(rf"temperature = ${params.temperature:.03f}$", (0.6, 0.32), xycoords="axes fraction")
             t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
     ax.grid(alpha=.3)
     ax.legend()
     fig.savefig(FIG_KA_MSD)
+
+
+def asd(rdf_new: Set[str], rdf_all: bool) -> None:
+    output = get_output(ASD, rdf_new=ASD.name in rdf_new or rdf_all)
+
+    fig = plt.figure(figsize=(8, 6))
+    ax = fig.add_subplot()
+    n = len(output.prod_rdf["distances"]) // 110
+    distances = output.prod_rdf["distances"][::n]
+    other_rdf = np.mean(output.other_prod_rdf["rdf"], axis=0)
+    rdf = np.mean(output.prod_rdf["rdf"], axis=0)[::n]
+    ax.plot(output.other_prod_rdf["distances"], other_rdf, linewidth=1, color="black", label="NVT")
+    for i in range(output.prod_rdf["rdf_ptype"].shape[1]):
+        for j in range(output.prod_rdf["rdf_ptype"].shape[2]):
+            if j != i:
+                continue
+            if j > i:
+                break
+            other_rdf_ij = np.mean(output.other_prod_rdf["rdf_ptype"][:, i, j, :], axis=0)
+            ax.plot(output.other_prod_rdf["distances"], other_rdf_ij, linewidth=1, color="black", alpha=.8)
+    ax.plot(distances, rdf, marker='.', linewidth=0, 
+            markeredgewidth=1, markersize=9, markeredgecolor="black",
+            color="red", alpha=.9, label="NVU RT")
+    for i in range(output.prod_rdf["rdf_ptype"].shape[1]):
+        for j in range(output.prod_rdf["rdf_ptype"].shape[2]):
+            if j != i:
+                continue
+            if j > i:
+                break
+            rdf_ij = np.mean(output.prod_rdf["rdf_ptype"][:, i, j, :], axis=0)[::n]
+            ax.plot(distances, rdf_ij, marker='.', linewidth=0, 
+                    markeredgewidth=1, markersize=9, markeredgecolor="black",
+                    alpha=.8, label=f"NVU RT {['A', 'B'][j]}-{['A', 'B'][i]}")
+    # t = ax.annotate(
+    #     rf"temperature = ${ASD.temperature}$",
+    #     (0.4, 0.62), xycoords="axes fraction")
+    # t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
+    ax.grid(alpha=.3)
+    ax.legend()
+    ax.set_xlabel("$r$")
+    ax.set_ylabel("$g(r)$")
+    fig.savefig(FIG_ASD_RDF)
+
+    fig = plt.figure(figsize=(8, 6))
+    ax = fig.add_subplot()
+    msd = get_msd(output.prod_output)
+    other_msd = get_msd(output.other_prod_output)
+    other_time = ASD.dt * 2 ** np.arange(len(other_msd))
+    n_msd, n_type = msd.shape
+
+    for i in range(n_type):
+        mass: float = 1
+        if ASD.pair_potential_name == "ASD" and i == 1:
+            mass = ASD.pair_potential_params["b_mass"]  # type: ignore
+        dt = get_delta_time_from_msd(msd[:, i], ASD.temperature, mass)
+        time = np.mean(dt) * 2 ** np.arange(n_msd)
+
+        color = "red" if i == 0 else "blue"
+
+        ax.loglog(other_time, other_msd[:, i], linewidth=1, color="black", label="NVT")
+        ax.loglog(time, msd[:, i], marker='.', linewidth=0, markeredgewidth=1, markersize=9, markeredgecolor="black",
+                  color=color, alpha=.9, label=f"NVU RT {['A', 'B'][i]}")
+    ax.grid(alpha=.3)
+    ax.legend()
+    fig.savefig(FIG_ASD_MSD)
 
 
 def no_inertia(rdf_new: Set[str], rdf_all: bool) -> None:
@@ -440,27 +550,27 @@ def no_inertia(rdf_new: Set[str], rdf_all: bool) -> None:
     ax.plot(output.other_prod_rdf["distances"], other_rdf, linewidth=1, color="black", label="NVT")
     ax.plot(distances, rdf, marker='.', linewidth=0, 
         markeredgewidth=1, markersize=9, markeredgecolor="black",
-        color="red", alpha=.9, label="NVU_RT (no inertia)")
+        color="red", alpha=.9, label="NVU RT (no inertia)")
     ax.grid(alpha=.3)
     ax.legend()
     ax.set_xlabel("$r$")
     ax.set_ylabel("$g(r)$")
 
     ax = fig.add_subplot(gs[1])
-    msd = get_msd(output.prod_output)
-    dt = get_delta_time(output.prod_output)
-    time = np.mean(dt) * 2 ** np.arange(len(msd))
+    msd = get_msd(output.prod_output)[:, 0]
+    dt = get_delta_time_from_msd(msd, NI.temperature)
+    time = dt * 2 ** np.arange(len(msd))
 
-    other_msd = get_msd(output.other_prod_output)
+    other_msd = get_msd(output.other_prod_output)[:, 0]
     other_time = NI.dt * 2 ** np.arange(len(other_msd))
 
     ax.loglog(other_time, other_msd, linewidth=1, color="black", label="NVT")
     ax.loglog(time, msd, marker='.', linewidth=0, 
               markeredgewidth=1, markersize=9, markeredgecolor="black",
-              color="red", alpha=.9, label="NVU_RT (no inertia)")
+              color="red", alpha=.9, label="NVU RT (no inertia)")
     ax.grid(alpha=.3)
     # ax.legend()
-    ax.set_ylabel(r"$\langle r^2 \rangle - \langle r \rangle^2$")
+    ax.set_ylabel(r"$\langle \Delta r^2 \rangle$")
     ax.set_xlabel("$t$")
     ax.yaxis.set_label_position("right")
     ax.yaxis.tick_right()
@@ -473,6 +583,7 @@ def main(
     run_lj: bool, 
     run_ka: bool, 
     run_no_inertia: bool,
+    run_asd: bool,
     rdf_new: Set[str],
     rdf_all: bool,
 ) -> None:
@@ -496,6 +607,11 @@ def main(
             no_inertia(rdf_new=rdf_new, rdf_all=rdf_all)
         except Exception:
             traceback.print_exc()
+    if run_asd:
+        try:
+            asd(rdf_new=rdf_new, rdf_all=rdf_all)
+        except Exception:
+            traceback.print_exc()
 
 
 DATA_ROOT_FOLDER = "paper-output"
@@ -506,11 +622,15 @@ FIG_DT_OVER_STEPS = os.path.join(FIG_ROOT_FOLDER, "dt_over_steps.svg")
 FIG_DT_CORRECTION = os.path.join(FIG_ROOT_FOLDER, "dt_correction.svg")
 FIG_DT_HIST = os.path.join(FIG_ROOT_FOLDER, "dt_hist.svg")
 FIG_PARABOLAS = os.path.join(FIG_ROOT_FOLDER, "parabolas.svg")
+FIG_PARABOLAS_AB = os.path.join(FIG_ROOT_FOLDER, "parabolas_ab.svg")
 FIG_PARABOLAS_RELATIVE_ERROR = os.path.join(FIG_ROOT_FOLDER, "parabolas_relative_error.svg")
 FIG_LJ_RDF = os.path.join(FIG_ROOT_FOLDER, "lennard_jones_rdf.svg")
 FIG_LJ_MSD = os.path.join(FIG_ROOT_FOLDER, "lennard_jones_msd.svg")
+FIG_LJ_TCONF = os.path.join(FIG_ROOT_FOLDER, "lennard_jones_tconf.svg")
 FIG_KA_RDF = os.path.join(FIG_ROOT_FOLDER, "kob_andersen_rdf.svg")
 FIG_KA_MSD = os.path.join(FIG_ROOT_FOLDER, "kob_andersen_msd.svg")
+FIG_ASD_RDF = os.path.join(FIG_ROOT_FOLDER, "asd_rdf.svg")
+FIG_ASD_MSD = os.path.join(FIG_ROOT_FOLDER, "asd_msd.svg")
 FIG_NO_INERTIA = os.path.join(FIG_ROOT_FOLDER, "no_inertia.svg")
 
 
@@ -520,10 +640,10 @@ LJ_N0 = SimulationVsNVT(
 """Single-component Lennard-Jones""",
     root_folder=DATA_ROOT_FOLDER,
     rho=0.85,
-    steps=2**19,
-    steps_per_timeblock=2**13,
-    scalar_output=2**6,
-    temperature=2.32,
+    steps=2**20,
+    steps_per_timeblock=2**15,
+    scalar_output=2**8,
+    temperature=1,
     tau=0.2,
     dt=0.005,
     cells=[4, 4, 4],
@@ -719,6 +839,54 @@ USE_BACKUP = {
 }
 
 
+asd_parameters: Dict[str, Union[npt.NDArray[np.float32], float]] = { 
+    "sig": np.array([[1.000, 0.894],
+                     [0.894, 0.788]], dtype=np.float32), 
+    "eps": np.array([[1.000, 0.342],
+                     [0.342, 0.117]], dtype=np.float32), 
+    "bonds": np.array([[0.584, 3000.], ]),
+    "b_mass": 0.195,
+}
+
+ASD = SimulationVsNVT(
+    name="NVT_ASD",
+    description="""ASD""",
+    root_folder="paper-output/",
+    rho=1.863,  # For ASD this is atomic density
+
+    vel_temperature=1.44,
+    temperature=0.465,
+    cells=[8, 8, 8],
+    tau=0.2,
+    dt=0.002,  # For some reasons it needs very this dt
+    # steps=4,
+    # steps_per_timeblock=2,
+    # scalar_output=0,
+    steps=2**17,
+    steps_per_timeblock=2**12,
+    scalar_output=2**6,
+
+    pair_potential_name="ASD",
+    pair_potential_params=asd_parameters,
+
+    nvu_params_max_abs_val=2,
+    # 10^-3 is the safest option
+    nvu_params_threshold=1e-3,
+    nvu_params_eps=5e-5,
+    nvu_params_max_steps=10,
+    nvu_params_max_initial_step_corrections=20,
+    # I dont really know how to tune this parameter
+    nvu_params_initial_step=0.5/0.1863**(1/3),
+    nvu_params_initial_step_if_high=1e-3,
+    nvu_params_step=1,
+    # nvu_params_save_path_u=True,
+    nvu_params_raytracing_method="parabola-newton",
+)
+ASD.temperature_eq = rp.make_function_ramp(  # type: ignore
+    value0=10.000, x0=ASD.dt * ASD.steps * (1 / 8),
+    value1=ASD.temperature, x1=ASD.dt * ASD.steps * (1 / 4))
+
+
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("-r", "--rdf", help="Recalculate rdf for simulations", nargs='*', default=[])
@@ -727,6 +895,7 @@ if __name__ == "__main__":
     parser.add_argument("-l", "--lj", help="Run Lennard-Jones", action="store_true")
     parser.add_argument("-k", "--ka", help="Run Kob-Andersen", action="store_true")
     parser.add_argument("-n", "--no_inertia", help="Run No inertia", action="store_true")
+    parser.add_argument("-s", "--asd", help="Run ASD", action="store_true")
     parser.add_argument("-d", "--device", help="Select NVIDIA device", type=int, default=None)
     if 'PBS_O_WORKDIR' in os.environ:
         flags = os.environ.get("flags", "")
@@ -756,6 +925,7 @@ if __name__ == "__main__":
         run_lj=args.lj, 
         run_ka=args.ka, 
         run_no_inertia=args.no_inertia,
+        run_asd=args.asd,
         rdf_new=set(args.rdf),
         rdf_all=args.rdf_all,
     )

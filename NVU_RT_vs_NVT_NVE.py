@@ -29,11 +29,11 @@ from argparse import ArgumentParser
 from numba import cuda
 import matplotlib.pyplot as plt
 from tools import *
-import NVU_RT_paper
+import NVU_RT_paper, isomorph_check
 import rumdpy as rp
 
 # This module is used to add some simulations to the known simulations list
-_ = NVU_RT_paper 
+_ = NVU_RT_paper, isomorph_check
 
 
 def main() -> None:
@@ -73,7 +73,7 @@ def main() -> None:
             except Exception:
                 pass
         else:
-            cuda.select_device(0)
+            raise Exception()
 
     for sim in args.sims:
         if sim == "list":
@@ -111,27 +111,19 @@ def main() -> None:
 
         if args.output_pdf:
             save_current_figures_to_pdf(p.output_figs)
+        if len(params) > 1:
+            plt.close("all")
 
     if args.show_figures:
         plt.show()
 
-asd_parameters: Dict[str, Union[npt.NDArray[np.float32], float]] = { 
-    "eps": np.array([[1.000, 0.894],
-                     [0.894, 0.788]], dtype=np.float32), 
-    "sig": np.array([[1.000, 0.342],
-                     [0.342, 0.117]], dtype=np.float32), 
-    "bonds": np.array([[0.584, 3000.], ]),
-    "b_mass": 0.195,
-}
-asd_parameters["cut"] = 2.5 * asd_parameters["sig"]
 
 kob_andersen_parameters: Dict[str, Union[npt.NDArray[np.float32], float]] = { 
-    "eps": np.array([[1.00, 1.50],
-                     [1.50, 0.50]], dtype=np.float32), 
     "sig": np.array([[1.00, 0.80],
                      [0.80, 0.88]], dtype=np.float32), 
+    "eps": np.array([[1.00, 1.50],
+                     [1.50, 0.50]], dtype=np.float32), 
 }
-kob_andersen_parameters["cut"] = 2.5 * kob_andersen_parameters["sig"]
 
 
 SimulationVsNVE(
@@ -683,8 +675,8 @@ and the curvature of Omega or the configuration temperature.""",
 
     nvu_params_max_abs_val=2,
     # 10^-3 is the safest option
-    nvu_params_threshold=1e-3,
-    nvu_params_eps=5e-5,
+    nvu_params_threshold=1e-5,
+    nvu_params_eps=5e-6,
     nvu_params_max_steps=10,
     nvu_params_max_initial_step_corrections=20,
     # I dont really know how to tune this parameter
@@ -700,6 +692,16 @@ dataclasses.replace(
     name="NVT_debug_low_rho",
     rho=0.45,
     nvu_params_initial_step=0.5/0.45**(1/3),
+)
+
+dataclasses.replace(
+    NVT_DEBUG,
+    name="NVT_debug_ka",
+    pair_potential_name="Kob-Andersen",
+    pair_potential_params=kob_andersen_parameters,
+    steps=2**20,
+    steps_per_timeblock=2**14,
+    scalar_output=2**8,
 )
 
 TB = SimulationVsNVT(
@@ -738,6 +740,10 @@ dataclasses.replace(
     TB, name="NVT_benchmark_newton", 
     nvu_params_raytracing_method="parabola-newton",
 )
+dataclasses.replace(
+    TB, name="NVT_bisection", 
+    nvu_params_raytracing_method="bisection",
+)
 
 
 EB = SimulationVsNVE(
@@ -775,42 +781,11 @@ dataclasses.replace(
     EB, name="NVE_benchmark_newton", 
     nvu_params_raytracing_method="parabola-newton",
 )
-
-SimulationVsNVT(
-    name="NVT_ASD",
-    description="""ASD""",
-    root_folder="output/NVU_RT_VS/",
-    rho=1.863,  # For ASD this is atomic density
-    temperature=0.465,
-    temperature_eq=rp.make_function_ramp(
-        value0=10.000, x0=0.005 * 2**23 * (1 / 8),
-        value1=0.465, x1=0.005 * 2**23 * (1 / 4)),
-    cells=[8, 8, 8],
-    tau=0.2,
-    dt=0.005,
-    # steps=4,
-    # steps_per_timeblock=2,
-    # scalar_output=0,
-    steps=2**23,
-    steps_per_timeblock=2**18,
-    scalar_output=2**11,
-
-    pair_potential_name="ASD",
-    pair_potential_params=asd_parameters,
-
-    nvu_params_max_abs_val=2,
-    # 10^-3 is the safest option
-    nvu_params_threshold=1e-3,
-    nvu_params_eps=5e-5,
-    nvu_params_max_steps=10,
-    nvu_params_max_initial_step_corrections=20,
-    # I dont really know how to tune this parameter
-    nvu_params_initial_step=0.5/0.844**(1/3),
-    nvu_params_initial_step_if_high=1e-3,
-    nvu_params_step=1,
-    # nvu_params_save_path_u=True,
-    nvu_params_raytracing_method="parabola",
+dataclasses.replace(
+    EB, name="NVE_benchmark_bisection", 
+    nvu_params_raytracing_method="bisection",
 )
+
 
 if __name__ == "__main__":
     main()

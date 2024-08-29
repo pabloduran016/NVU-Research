@@ -6,3 +6,4 @@ rdf.dat
 *.DS_Store
 paper-figs
 paper-output
+benchmarks.txt

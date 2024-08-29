@@ -21,6 +21,7 @@ ytick.right : True
 axes.linewidth : 0.5
 axes.grid : True
 axes.axisbelow : True
+axes.labelsize : x-large
 
 grid.linestyle : --
 grid.color : k
@@ -34,12 +35,14 @@ legend.edgecolor: "black"
 legend.shadow : True
 legend.scatterpoints : 2
 legend.markerscale : .8
-legend.fontsize : 10
+legend.fontsize : 12
 legend.fancybox : False
 legend.numpoints : 1
 
 savefig.bbox : tight
 savefig.pad_inches : 0.05
+
+font.size : 12
 
 
 # Use LaTeX for math formatting
