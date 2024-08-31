@@ -151,170 +151,170 @@ def method(rdf_new: Set[str], rdf_all: bool) -> None:
     n1 = output_n1.prod_output["block"].shape[3]
     output_n2 = get_output(LJ_N2, rdf_new=LJ_N2.name in rdf_new or rdf_all)
     n2 = output_n2.prod_output["block"].shape[3]
-    # n0_dt = get_delta_time(output_n0.prod_output)
-    # n0_steps = get_steps(output_n0.prod_output)
-    # n1_dt = get_delta_time(output_n1.prod_output)
-    # n1_steps = get_steps(output_n1.prod_output)
-    # n2_dt = get_delta_time(output_n2.prod_output)
-    # n2_steps = get_steps(output_n2.prod_output)
-    #
-    # n0_dt_raw, = rp.extract_scalars(output_n0.prod_output, ["dt"], integrator_outputs=rp.integrators.NVU_RT.outputs)
-    # n1_dt_raw, = rp.extract_scalars(output_n1.prod_output, ["dt"], integrator_outputs=rp.integrators.NVU_RT.outputs)
-    # n2_dt_raw, = rp.extract_scalars(output_n2.prod_output, ["dt"], integrator_outputs=rp.integrators.NVU_RT.outputs)
-    #
-    # fig = plt.figure(figsize=(10, 8))
-    # # fig.suptitle(r"Correction to $\Delta t$ to account for curvature fo the surface")
-    # gs = GridSpec(3, 2, width_ratios=[1, 0.5], hspace=.6, wspace=0)
-    # fig.text(1.0, 0.5, r"$\frac{\alpha}{\sin\alpha} - 1 = \frac{\Delta t}{\Delta t_{not\,corrected}} - 1$", 
-    #          va='center', rotation=90, fontsize="x-large")
-    # for (i, steps, dt, dt_raw, n) in zip(
-    #     range(3), 
-    #     (n0_steps, n1_steps, n2_steps), 
-    #     (n0_dt, n1_dt, n2_dt),
-    #     (n0_dt_raw, n1_dt_raw, n2_dt_raw),
-    #     (n0, n1, n2)
-    # ):
-    #     row = fig.add_subplot(gs[i, :])
-    #     row.axis('off')
-    #     row.set_title(rf"$N = {n}$")
-    #
-    #     ax0 = fig.add_subplot(gs[i, 0])
-    #     ax0.plot(steps, dt/dt_raw - 1, color="black", linewidth=.5, alpha=0.8)
-    #     ax0.set_xlabel(r"steps")
-    #     # ax0.set_ylabel(r"$\frac{\alpha}{\sin\alpha} - 1 = \frac{\Delta t}{\Delta t_{not\,corrected}} - 1$")
-    #     ax0.grid(alpha=0.5)
-    #
-    #     ax1 = fig.add_subplot(gs[i, 1])
-    #     ax1.hist(dt/dt_raw - 1, orientation="horizontal", density=True, color="black", alpha=0.8)
-    #     ax1.set_xlabel(r"Probability")
-    #     ax1.yaxis.set_label_position("right")
-    #     ax1.yaxis.tick_right()
-    #     ax1.grid(alpha=0.5)
-    #
-    # fig.savefig(FIG_DT_CORRECTION)
-    # plt.close(fig)
-    #
-    # fig = plt.figure(figsize=(8, 3))
-    # ax = fig.add_subplot()
-    # ax.plot(n0_steps, n0_dt, linewidth=1, color="#BBB", alpha=0.8, label=rf"$N = {n0}$")
-    # ax.plot(n1_steps, n1_dt, linewidth=1, color="#555", alpha=0.8, label=rf"$N = {n1}$")
-    # ax.plot(n2_steps, n2_dt, linewidth=1, color="#000", alpha=0.8, label=rf"$N = {n2}$")
-    # ax.legend()
-    # ax.set_xlabel(r"steps")
-    # ax.set_ylabel(r"$\Delta t$")
-    # ax.grid(alpha=.5)
-    # fig.savefig(FIG_DT_OVER_STEPS)
-    # plt.close(fig)
-    #
-    # fig = plt.figure(figsize=(8, 3))
-    # ax = fig.add_subplot()
-    # d_time_sq0 = n0_dt**2 - (n0_dt**2).mean()
-    # d_time_sq1 = n1_dt**2 - (n1_dt**2).mean()
-    # d_time_sq2 = n2_dt**2 - (n2_dt**2).mean()
-    # s_0 = np.std(d_time_sq0)
-    # s_1 = np.std(d_time_sq1)
-    # s_2 = np.std(d_time_sq2)
-    # 
-    # ax.hist(d_time_sq0, bins=30, density=True, facecolor="#eb3434", alpha=0.8, label=rf"$N = {n0}$; $\sigma = {scientific_notation(s_0, 2)}$")
-    # ax.hist(d_time_sq1, bins=30, density=True, facecolor="#34b1eb", alpha=0.8, label=rf"$N = {n1}$; $\sigma = {scientific_notation(s_1, 2)}$")
-    # ax.hist(d_time_sq2, bins=30, density=True, facecolor="black", alpha=0.6, label=rf"$N = {n2}$; $\sigma = {scientific_notation(s_2, 2)}$")
-    # ax.set_xlim(-1e-4, 1e-4)
-    # ax.set_xlabel(r"$\left(\Delta t\right)^2 - \langle \left(\Delta t\right)^2\rangle$")
-    # ax.set_ylabel(r"Probability")
-    # ax.grid(alpha=0.5)
-    # ax.legend()
-    # fig.savefig(FIG_DT_HIST)
-    # plt.close(fig)
-    #
-    # ## PARABOLA IN PATHS
-    # ##   - Plot Data + Fit
-    # ##   - Plot Error
-    #
-    # xs, ys = get_path_u(output_n1.prod_output)
-    # 
-    # u = np.arange(xs.shape[0])
-    # p = np.polyfit(u, ys, 2)
-    # y_pred = p[0, :] * u[:, np.newaxis]**2 + p[1, :] * u[:, np.newaxis] + p[2, :]
-    # fig = plt.figure(figsize=(8, 3))
-    # gs = GridSpec(1, 2, width_ratios=[1, .5], wspace=0)
-    # ax0 = fig.add_subplot(gs[0])
-    # error = (y_pred - ys) / ys
-    # n = error.flatten().shape[0] // 6000
-    # ax0.plot(error.T.flatten()[::n], ".", color="black", alpha=0.2)
-    # ax0.set_xlabel("sample points")
-    # ax0.set_ylabel(r"$\frac{y_{pred} - y_i}{y_i}$", rotation=0, labelpad=20)
-    # ax0.grid(alpha=0.5)
-    # ax1 = fig.add_subplot(gs[1], sharey=ax0)
-    # ax1.hist(error.flatten(), orientation="horizontal", density=True, bins=30, color="black", alpha=0.8)
-    # ax1.set_xlabel(r"Probability")
-    # ax1.set_ylabel(r"$\frac{y_{pred} - y_i}{y_i}$", rotation=0, labelpad=20)
-    # ax1.yaxis.set_label_position("right")
-    # ax1.yaxis.tick_right()
-    # ax1.grid(alpha=0.5)
-    # fig.savefig(FIG_PARABOLAS_RELATIVE_ERROR)
-    # plt.close(fig)
-    #
-    # a = p[0, :]
-    # b = p[1, :]
-    # fig = plt.figure(figsize=(8, 3))
-    # gs = GridSpec(1, 2, wspace=.3)
-    # ax0 = fig.add_subplot(gs[0])
-    # ax0.hist(a, density=True, bins=30, color="black", alpha=0.8)
-    # ax0.set_xlabel("$a$")
-    # ax0.set_ylabel("$p(a)$")
-    # mu = np.mean(a)
-    # sig = np.std(a)
-    # t = ax0.annotate(
-    #     rf"$\mu(a) = {mu:.02f}$""\n" 
-    #     rf"$\sigma(a) = {sig:.03f}$",
-    #     (0.55, 0.90), xycoords="axes fraction", verticalalignment="top")
-    # t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
-    # ax1 = fig.add_subplot(gs[1])
-    # ax1.hist(b, density=True, bins=30, color="black", alpha=0.8)
-    # ax1.set_xlabel("$b$")
-    # ax1.set_ylabel("$p(b)$")
-    # mu = np.mean(b)
-    # sig = np.std(b)
-    # t = ax1.annotate(
-    #     rf"$\mu(b) = {mu:.02f}$""\n" 
-    #     rf"$\sigma(b) = {sig:.03f}$",
-    #     (0.05, 0.90), xycoords="axes fraction", verticalalignment="top")
-    # t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
-    # fig.savefig(FIG_PARABOLAS_AB)
-    # plt.close(fig)
-    #
-    #
-    # indices = np.argsort(np.abs(ys).max(axis=0))[::-1][[0, ys.shape[1]//4, ys.shape[1]*2//3, -1]]
-    # # print(indices, np.abs(ys).max(axis=0)[indices])
-    # fig = plt.figure(figsize=(8, 3))
-    # gs = GridSpec(1, 2, wspace=0)
-    # ax1 = fig.add_subplot(gs[0])
-    # ax2 = fig.add_subplot(gs[1])
-    # for i, (ax, xs) in enumerate(((ax1, xs/xs[[-1], :]), (ax2, xs))):
-    #     for j, path_j in enumerate(indices):
-    #         x_j = xs[:, path_j]
-    #         y_j = ys[:, path_j]
-    #         c = np.polyfit(x_j, y_j, 2)
-    #         p = np.poly1d(c)
-    #         xs_j = np.linspace(x_j[0], x_j[-1])
-    #         line0, = ax.plot(xs_j, p(xs_j), '--', color="black", linewidth=1)
-    #         line1, = ax.plot(x_j, y_j, ".", linewidth=0, alpha=.8,
-    #                 color="red", markeredgewidth=1,
-    #                 markersize=10, markeredgecolor="black")
-    #         if j == 0:
-    #             line0.set_label("Fit")
-    #             line1.set_label("Data")
-    #     if i == 0:
-    #         ax.legend()
-    #         ax.set_xlabel(r"$\frac{x}{x_{max}}$")
-    #         ax.set_ylabel(r"$U$")
-    #     else:
-    #         ax.set_xlabel(r"$x$")
-    #         ax.yaxis.set_label_position("right")
-    #         ax.yaxis.tick_right()
-    #     ax.grid(alpha=0.5)
-    # fig.savefig(FIG_PARABOLAS)
-    # plt.close(fig)
+    n0_dt = get_delta_time(output_n0.prod_output)
+    n0_steps = get_steps(output_n0.prod_output)
+    n1_dt = get_delta_time(output_n1.prod_output)
+    n1_steps = get_steps(output_n1.prod_output)
+    n2_dt = get_delta_time(output_n2.prod_output)
+    n2_steps = get_steps(output_n2.prod_output)
+
+    n0_dt_raw, = rp.extract_scalars(output_n0.prod_output, ["dt"], integrator_outputs=rp.integrators.NVU_RT.outputs)
+    n1_dt_raw, = rp.extract_scalars(output_n1.prod_output, ["dt"], integrator_outputs=rp.integrators.NVU_RT.outputs)
+    n2_dt_raw, = rp.extract_scalars(output_n2.prod_output, ["dt"], integrator_outputs=rp.integrators.NVU_RT.outputs)
+
+    fig = plt.figure(figsize=(10, 8))
+    # fig.suptitle(r"Correction to $\Delta t$ to account for curvature fo the surface")
+    gs = GridSpec(3, 2, width_ratios=[1, 0.5], hspace=.6, wspace=0)
+    fig.text(1.0, 0.5, r"$\frac{\alpha}{\sin\alpha} - 1 = \frac{\Delta t}{\Delta t_{not\,corrected}} - 1$", 
+             va='center', rotation=90, fontsize="x-large")
+    for (i, steps, dt, dt_raw, n) in zip(
+        range(3), 
+        (n0_steps, n1_steps, n2_steps), 
+        (n0_dt, n1_dt, n2_dt),
+        (n0_dt_raw, n1_dt_raw, n2_dt_raw),
+        (n0, n1, n2)
+    ):
+        row = fig.add_subplot(gs[i, :])
+        row.axis('off')
+        row.set_title(rf"$N = {n}$")
+
+        ax0 = fig.add_subplot(gs[i, 0])
+        ax0.plot(steps, dt/dt_raw - 1, color="black", linewidth=.5, alpha=0.8)
+        ax0.set_xlabel(r"steps")
+        # ax0.set_ylabel(r"$\frac{\alpha}{\sin\alpha} - 1 = \frac{\Delta t}{\Delta t_{not\,corrected}} - 1$")
+        ax0.grid(alpha=0.5)
+
+        ax1 = fig.add_subplot(gs[i, 1])
+        ax1.hist(dt/dt_raw - 1, orientation="horizontal", density=True, color="black", alpha=0.8)
+        ax1.set_xlabel(r"Probability")
+        ax1.yaxis.set_label_position("right")
+        ax1.yaxis.tick_right()
+        ax1.grid(alpha=0.5)
+
+    fig.savefig(FIG_DT_CORRECTION)
+    plt.close(fig)
+
+    fig = plt.figure(figsize=(8, 3))
+    ax = fig.add_subplot()
+    ax.plot(n0_steps, n0_dt, linewidth=1, color="#BBB", alpha=0.8, label=rf"$N = {n0}$")
+    ax.plot(n1_steps, n1_dt, linewidth=1, color="#555", alpha=0.8, label=rf"$N = {n1}$")
+    ax.plot(n2_steps, n2_dt, linewidth=1, color="#000", alpha=0.8, label=rf"$N = {n2}$")
+    ax.legend()
+    ax.set_xlabel(r"steps")
+    ax.set_ylabel(r"$\Delta t$")
+    ax.grid(alpha=.5)
+    fig.savefig(FIG_DT_OVER_STEPS)
+    plt.close(fig)
+
+    fig = plt.figure(figsize=(8, 3))
+    ax = fig.add_subplot()
+    d_time_sq0 = n0_dt**2 - (n0_dt**2).mean()
+    d_time_sq1 = n1_dt**2 - (n1_dt**2).mean()
+    d_time_sq2 = n2_dt**2 - (n2_dt**2).mean()
+    s_0 = np.std(d_time_sq0)
+    s_1 = np.std(d_time_sq1)
+    s_2 = np.std(d_time_sq2)
+
+    ax.hist(d_time_sq0, bins=30, density=True, facecolor="#eb3434", alpha=0.8, label=rf"$N = {n0}$; $\sigma = {scientific_notation(s_0, 2)}$")
+    ax.hist(d_time_sq1, bins=30, density=True, facecolor="#34b1eb", alpha=0.8, label=rf"$N = {n1}$; $\sigma = {scientific_notation(s_1, 2)}$")
+    ax.hist(d_time_sq2, bins=30, density=True, facecolor="black", alpha=0.6, label=rf"$N = {n2}$; $\sigma = {scientific_notation(s_2, 2)}$")
+    ax.set_xlim(-1e-4, 1e-4)
+    ax.set_xlabel(r"$\left(\Delta t\right)^2 - \langle \left(\Delta t\right)^2\rangle$")
+    ax.set_ylabel(r"Probability")
+    ax.grid(alpha=0.5)
+    ax.legend()
+    fig.savefig(FIG_DT_HIST)
+    plt.close(fig)
+
+    ## PARABOLA IN PATHS
+    ##   - Plot Data + Fit
+    ##   - Plot Error
+
+    xs, ys = get_path_u(output_n1.prod_output)
+
+    u = np.arange(xs.shape[0])
+    p = np.polyfit(u, ys, 2)
+    y_pred = p[0, :] * u[:, np.newaxis]**2 + p[1, :] * u[:, np.newaxis] + p[2, :]
+    fig = plt.figure(figsize=(8, 3))
+    gs = GridSpec(1, 2, width_ratios=[1, .5], wspace=0)
+    ax0 = fig.add_subplot(gs[0])
+    error = (y_pred - ys) / ys
+    n = error.flatten().shape[0] // 6000
+    ax0.plot(error.T.flatten()[::n], ".", color="black", alpha=0.2)
+    ax0.set_xlabel("sample points")
+    ax0.set_ylabel(r"$\frac{y_{pred} - y_i}{y_i}$", rotation=0, labelpad=20)
+    ax0.grid(alpha=0.5)
+    ax1 = fig.add_subplot(gs[1], sharey=ax0)
+    ax1.hist(error.flatten(), orientation="horizontal", density=True, bins=30, color="black", alpha=0.8)
+    ax1.set_xlabel(r"Probability")
+    ax1.set_ylabel(r"$\frac{y_{pred} - y_i}{y_i}$", rotation=0, labelpad=20)
+    ax1.yaxis.set_label_position("right")
+    ax1.yaxis.tick_right()
+    ax1.grid(alpha=0.5)
+    fig.savefig(FIG_PARABOLAS_RELATIVE_ERROR)
+    plt.close(fig)
+
+    a = p[0, :]
+    b = p[1, :]
+    fig = plt.figure(figsize=(8, 3))
+    gs = GridSpec(1, 2, wspace=.3)
+    ax0 = fig.add_subplot(gs[0])
+    ax0.hist(a, density=True, bins=30, color="black", alpha=0.8)
+    ax0.set_xlabel("$a$")
+    ax0.set_ylabel("$p(a)$")
+    mu = np.mean(a)
+    sig = np.std(a)
+    t = ax0.annotate(
+        rf"$\mu(a) = {mu:.02f}$""\n" 
+        rf"$\sigma(a) = {sig:.03f}$",
+        (0.55, 0.90), xycoords="axes fraction", verticalalignment="top")
+    t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
+    ax1 = fig.add_subplot(gs[1])
+    ax1.hist(b, density=True, bins=30, color="black", alpha=0.8)
+    ax1.set_xlabel("$b$")
+    ax1.set_ylabel("$p(b)$")
+    mu = np.mean(b)
+    sig = np.std(b)
+    t = ax1.annotate(
+        rf"$\mu(b) = {mu:.02f}$""\n" 
+        rf"$\sigma(b) = {sig:.03f}$",
+        (0.05, 0.90), xycoords="axes fraction", verticalalignment="top")
+    t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
+    fig.savefig(FIG_PARABOLAS_AB)
+    plt.close(fig)
+
+
+    indices = np.argsort(np.abs(ys).max(axis=0))[::-1][[0, ys.shape[1]//4, ys.shape[1]*2//3, -1]]
+    # print(indices, np.abs(ys).max(axis=0)[indices])
+    fig = plt.figure(figsize=(8, 3))
+    gs = GridSpec(1, 2, wspace=0)
+    ax1 = fig.add_subplot(gs[0])
+    ax2 = fig.add_subplot(gs[1])
+    for i, (ax, xs) in enumerate(((ax1, xs/xs[[-1], :]), (ax2, xs))):
+        for j, path_j in enumerate(indices):
+            x_j = xs[:, path_j]
+            y_j = ys[:, path_j]
+            c = np.polyfit(x_j, y_j, 2)
+            p = np.poly1d(c)
+            xs_j = np.linspace(x_j[0], x_j[-1])
+            line0, = ax.plot(xs_j, p(xs_j), '--', color="black", linewidth=1)
+            line1, = ax.plot(x_j, y_j, ".", linewidth=0, alpha=.8,
+                    color="red", markeredgewidth=1,
+                    markersize=10, markeredgecolor="black")
+            if j == 0:
+                line0.set_label("Fit")
+                line1.set_label("Data")
+        if i == 0:
+            ax.legend()
+            ax.set_xlabel(r"$\frac{x}{x_{max}}$")
+            ax.set_ylabel(r"$U$")
+        else:
+            ax.set_xlabel(r"$x$")
+            ax.yaxis.set_label_position("right")
+            ax.yaxis.tick_right()
+        ax.grid(alpha=0.5)
+    fig.savefig(FIG_PARABOLAS)
+    plt.close(fig)
     
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot()
