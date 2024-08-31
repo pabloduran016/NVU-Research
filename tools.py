@@ -144,7 +144,6 @@ def run_NVU_RT(params: "SimulationParameters", do_nvu_eq: bool) -> None:
         float_type=params.nvu_params_float_type,
     )
     pair_p, _mass, _ptype = params.get_pair_potential(conf)
-    print(pair_p)
     if do_nvu_eq:
         print("========== NVU EQ ==========")
         sim = rp.Simulation(
@@ -227,7 +226,7 @@ class SimulationParameters:
     nvu_params_initial_step: float
     nvu_params_initial_step_if_high: float
     nvu_params_step: float
-    nvu_params_mode: Literal["reflection", "no-inertia"] = "reflection"
+    nvu_params_mode: Literal["reflection", "no-inertia", "reflection-mass_scaling"] = "reflection"
     nvu_params_save_path_u: bool = False
     nvu_params_raytracing_method: Literal["parabola", "parabola-newton", "bisection"] = "parabola"
     nvu_params_float_type: Literal["32", "64"] = "64"
@@ -287,7 +286,7 @@ class SimulationParameters:
             d_sig = self.pair_potential_params["d_sig"]
             sig_pp = calculate_per_particle_poly(ntypes, d_sig)
             sig = np.add.outer(sig_pp, sig_pp) / 2
-            eps = np.ones((ntypes, ntypes), dtype=np.float32)
+            eps = np.ones((ntypes, ntypes), dtype=np.float32) * self.pair_potential_params["eps"]
             cut = np.array(sig)*2.5
             param_values = (sig, eps, cut)
         elif self.pair_potential_name == "LJ-eps_poly":
@@ -302,7 +301,7 @@ class SimulationParameters:
             d_eps = self.pair_potential_params["d_eps"]
             eps_pp = calculate_per_particle_poly(ntypes, d_eps)
             eps = np.sqrt(np.outer(eps_pp, eps_pp))
-            sig = np.ones((ntypes, ntypes), dtype=np.float32)
+            sig = np.ones((ntypes, ntypes), dtype=np.float32) * self.pair_potential_params["sig"]
             cut = np.array(sig)*2.5
             param_values = (sig, eps, cut)
         elif self.pair_potential_name == "ASD":

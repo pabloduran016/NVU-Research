@@ -257,15 +257,29 @@ def method(rdf_new: Set[str], rdf_all: bool) -> None:
     a = p[0, :]
     b = p[1, :]
     fig = plt.figure(figsize=(8, 3))
-    gs = GridSpec(1, 2)
+    gs = GridSpec(1, 2, wspace=.3)
     ax0 = fig.add_subplot(gs[0])
     ax0.hist(a, density=True, bins=30, color="black", alpha=0.8)
     ax0.set_xlabel("$a$")
     ax0.set_ylabel("$p(a)$")
+    mu = np.mean(a)
+    sig = np.std(a)
+    t = ax0.annotate(
+        rf"$\mu(a) = {mu:.02f}$""\n" 
+        rf"$\sigma(a) = {sig:.03f}$",
+        (0.55, 0.90), xycoords="axes fraction", verticalalignment="top")
+    t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
     ax1 = fig.add_subplot(gs[1])
     ax1.hist(b, density=True, bins=30, color="black", alpha=0.8)
     ax1.set_xlabel("$b$")
     ax1.set_ylabel("$p(b)$")
+    mu = np.mean(b)
+    sig = np.std(b)
+    t = ax1.annotate(
+        rf"$\mu(b) = {mu:.02f}$""\n" 
+        rf"$\sigma(b) = {sig:.03f}$",
+        (0.05, 0.90), xycoords="axes fraction", verticalalignment="top")
+    t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
     fig.savefig(FIG_PARABOLAS_AB)
     plt.close(fig)
 
@@ -338,12 +352,12 @@ def lennard_jones(rdf_new: Set[str], rdf_all: bool) -> None:
     ax_a = fig.add_subplot(gs[0, 0:2])
     ax_b = fig.add_subplot(gs[0, 2:4])
     ax_c = fig.add_subplot(gs[1, 1:3])
-    for ax, output, params in (
+    for i, (ax, output, params) in enumerate((
         (ax_a, output_a, LJ_A),
         (ax_b, output_b, LJ_B),
         (ax_c, output_c, LJ_C)
-    ):
-        n = output.prod_rdf["distances"].shape[0] // 100
+    )):
+        n = output.prod_rdf["distances"].shape[0] // 200
         rdf = np.mean(output.prod_rdf["rdf"], axis=0)[::n]
         distances = output.prod_rdf["distances"][::n]
         other_rdf = np.mean(output.other_prod_rdf["rdf"], axis=0)
@@ -360,6 +374,8 @@ def lennard_jones(rdf_new: Set[str], rdf_all: bool) -> None:
         ax.legend()
         ax.set_xlabel("$r$")
         ax.set_ylabel("$g(r)$")
+        if i < 2:
+            ax.set_xlim(0, 4)
     fig.savefig(FIG_LJ_RDF)
 
     fig = plt.figure(figsize=(10, 7))
@@ -409,7 +425,7 @@ def kob_andersen(rdf_new: Set[str], rdf_all: bool) -> None:
         (ax_a, outputs[0], KA_PARAMS[0]),
         (ax_b, outputs[-1], KA_PARAMS[-1]),
     ):
-        n = len(output.prod_rdf["distances"]) // 80
+        n = len(output.prod_rdf["distances"]) // 180
         distances = output.prod_rdf["distances"][::n]
         other_rdf = np.mean(output.other_prod_rdf["rdf"], axis=0)
         rdf = np.mean(output.prod_rdf["rdf"], axis=0)[::n]
@@ -430,7 +446,7 @@ def kob_andersen(rdf_new: Set[str], rdf_all: bool) -> None:
                 rdf_ij = np.mean(output.prod_rdf["rdf_ptype"][:, i, j, :], axis=0)[::n]
                 ax.plot(distances, rdf_ij, marker='.', linewidth=0, 
                         markeredgewidth=1, markersize=9, markeredgecolor="black",
-                        alpha=.9, label=f"NVU RT {['A', 'B'][j]}-{['A', 'B'][i]}")
+                        alpha=.8, label=f"NVU RT {['A', 'B'][j]}-{['A', 'B'][i]}")
         t = ax.annotate(
             rf"temperature = ${params.temperature}$",
             (0.4, 0.62), xycoords="axes fraction")
@@ -439,39 +455,54 @@ def kob_andersen(rdf_new: Set[str], rdf_all: bool) -> None:
         ax.legend()
         ax.set_xlabel("$r$")
         ax.set_ylabel("$g(r)$")
+        ax.set_xlim(0, 4)
     fig.savefig(FIG_KA_RDF)
 
-    fig = plt.figure(figsize=(8, 6))
-    gs = GridSpec(3, 3, wspace=.5, hspace=.2)
-    ax = fig.add_subplot()
+    fig = plt.figure(figsize=(8, 8))
+    gs = GridSpec(2, 1, wspace=.2, hspace=.2)
+    axs = [fig.add_subplot(gs[i]) for i in range(2)]
     for i, (output, params) in enumerate(zip(outputs, KA_PARAMS)):
+        msd = get_msd(output.prod_output)
         # ax = fig.add_subplot(gs[i])
-        msd = get_msd(output.prod_output)[:, 0]
-        dt = get_delta_time_from_msd(msd, params.temperature)
-        time = np.mean(dt) * 2 ** np.arange(len(msd))
+        n_msd, n_ptype = msd.shape
+        other_msd = get_msd(output.other_prod_output)
+        other_time = params.dt * 2 ** np.arange(other_msd.shape[0])
 
-        other_msd = get_msd(output.other_prod_output)[:, 0]
-        other_time = params.dt * 2 ** np.arange(len(other_msd))
+        for ax, j in zip(axs, range(n_ptype)):
+            msd_j = msd[:, j]
+            other_msd_j = other_msd[:, j]
+            dt = get_delta_time_from_msd(msd_j, params.temperature)
+            time = dt * 2 ** np.arange(n_msd)
 
-        line0, = ax.loglog(other_time, other_msd, linewidth=1, color="black")
-        line1, = ax.loglog(time, msd, marker='.', linewidth=0, 
-                           markeredgewidth=1, markersize=9, markeredgecolor="black",
-                           color="red", alpha=.9)
-        if i == 0:
-            line0.set_label("NVT")
-            line1.set_label("NVU RT")
-            t = ax.annotate(rf"temperature = ${params.temperature:.03f}$", (0.2, 0.62), xycoords="axes fraction")
-            t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
-        if i == len(outputs) - 1:
-            t = ax.annotate(rf"temperature = ${params.temperature:.03f}$", (0.6, 0.32), xycoords="axes fraction")
-            t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
-    ax.grid(alpha=.3)
-    ax.legend()
+            line0, = ax.loglog(other_time, other_msd_j, linewidth=1, color="black")
+            line1, = ax.loglog(time, msd_j, marker='.', linewidth=0, 
+                               markeredgewidth=1, markersize=9, markeredgecolor="black",
+                               color="red" if j == 0 else "green", alpha=.9)
+            if i == 0:
+                line0.set_label("NVT")
+                line1.set_label("NVU RT")
+                t = ax.annotate(rf"temperature = ${params.temperature:.03f}$", (0.05, 0.8), xycoords="axes fraction")
+                t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
+
+                t = ax.annotate(rf"{'A' if j == 0 else 'B'}", (0.4, 0.2), xycoords="axes fraction",
+                                color="red" if j == 0 else "green")
+                t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
+            if i == len(outputs) - 1:
+                t = ax.annotate(rf"temperature = ${params.temperature:.03f}$", (0.6, 0.32), xycoords="axes fraction")
+                t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
+
+            if i == 0:
+                ax.grid(alpha=.3)
+                ax.legend(loc="lower right")
+                ax.set_ylabel(r"$\langle \Delta r^2 \rangle$")
+                ax.set_xlabel("$t$")
+                ax.set_ylim(1e-4, 1e2)
     fig.savefig(FIG_KA_MSD)
 
 
 def asd(rdf_new: Set[str], rdf_all: bool) -> None:
     output = get_output(ASD, rdf_new=ASD.name in rdf_new or rdf_all)
+    output_no_scale = get_output(ASD_NO_SCALE, rdf_new=ASD.name in rdf_new or rdf_all)
 
     fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot()
@@ -513,6 +544,31 @@ def asd(rdf_new: Set[str], rdf_all: bool) -> None:
 
     fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot()
+    msd = get_msd(output_no_scale.prod_output)
+    other_msd = get_msd(output_no_scale.other_prod_output)
+    other_time = ASD.dt * 2 ** np.arange(len(other_msd))
+    n_msd, n_type = msd.shape
+
+    for i in range(n_type):
+        mass: float = 1
+        if ASD.pair_potential_name == "ASD" and i == 1:
+            mass = ASD.pair_potential_params["b_mass"]  # type: ignore
+        dt = get_delta_time_from_msd(msd[:, i], ASD.temperature, mass)
+        time = np.mean(dt) * 2 ** np.arange(n_msd)
+
+        color = "red" if i == 0 else "blue"
+
+        ax.loglog(other_time, other_msd[:, i], linewidth=1, color="black", label="NVT")
+        ax.loglog(time, msd[:, i], marker='.', linewidth=0, markeredgewidth=1, markersize=9, markeredgecolor="black",
+                  color=color, alpha=.9, label=f"NVU RT {['A', 'B'][i]}")
+    ax.grid(alpha=.3)
+    ax.legend()
+    ax.set_ylabel(r"$\langle \Delta r^2 \rangle$")
+    ax.set_xlabel("$t$")
+    fig.savefig(FIG_ASD_MSD_NO_SCALE)
+
+    fig = plt.figure(figsize=(8, 6))
+    ax = fig.add_subplot()
     msd = get_msd(output.prod_output)
     other_msd = get_msd(output.other_prod_output)
     other_time = ASD.dt * 2 ** np.arange(len(other_msd))
@@ -532,6 +588,8 @@ def asd(rdf_new: Set[str], rdf_all: bool) -> None:
                   color=color, alpha=.9, label=f"NVU RT {['A', 'B'][i]}")
     ax.grid(alpha=.3)
     ax.legend()
+    ax.set_ylabel(r"$\langle \Delta r^2 \rangle$")
+    ax.set_xlabel("$t$")
     fig.savefig(FIG_ASD_MSD)
 
 
@@ -631,6 +689,7 @@ FIG_KA_RDF = os.path.join(FIG_ROOT_FOLDER, "kob_andersen_rdf.svg")
 FIG_KA_MSD = os.path.join(FIG_ROOT_FOLDER, "kob_andersen_msd.svg")
 FIG_ASD_RDF = os.path.join(FIG_ROOT_FOLDER, "asd_rdf.svg")
 FIG_ASD_MSD = os.path.join(FIG_ROOT_FOLDER, "asd_msd.svg")
+FIG_ASD_MSD_NO_SCALE = os.path.join(FIG_ROOT_FOLDER, "asd_msd_no_scale.svg")
 FIG_NO_INERTIA = os.path.join(FIG_ROOT_FOLDER, "no_inertia.svg")
 
 
@@ -728,7 +787,6 @@ kob_andersen_parameters: Dict[str, Union[npt.NDArray[np.float32], float]] = {
     "sig": np.array([[1.00, 0.80],
                      [0.80, 0.88]], dtype=np.float32), 
 }
-kob_andersen_parameters["cut"] = 2.5 * kob_andersen_parameters["sig"]
 
 KA0 = SimulationVsNVT(
     name="KA0",
@@ -757,7 +815,7 @@ Figure 2 a and b of paper II""",
     nvu_params_step=1,
     nvu_params_mode="reflection",
     # nvu_params_save_path_u=True,
-    nvu_params_raytracing_method="parabola",
+    nvu_params_raytracing_method="parabola-newton",
 )
 
 KA_PARAMS = [KA0]
@@ -833,11 +891,6 @@ Try to prove that time-reversibility is essential for the integrator""",
     nvu_params_eps=1e-7,
 )
 
-USE_BACKUP = {
-    "KA5": dataclasses.replace(KA_PARAMS[5], name="KA5.back"),
-    "KA6": dataclasses.replace(KA_PARAMS[6], name="KA6.back"),
-}
-
 
 asd_parameters: Dict[str, Union[npt.NDArray[np.float32], float]] = { 
     "sig": np.array([[1.000, 0.894],
@@ -862,30 +915,43 @@ ASD = SimulationVsNVT(
     # steps=4,
     # steps_per_timeblock=2,
     # scalar_output=0,
-    steps=2**17,
-    steps_per_timeblock=2**12,
-    scalar_output=2**6,
+    steps=2**22,
+    steps_per_timeblock=2**16,
+    scalar_output=2**10,
 
     pair_potential_name="ASD",
     pair_potential_params=asd_parameters,
 
     nvu_params_max_abs_val=2,
     # 10^-3 is the safest option
-    nvu_params_threshold=1e-3,
-    nvu_params_eps=5e-5,
+    nvu_params_threshold=1e-5,
+    nvu_params_eps=5e-6,
     nvu_params_max_steps=10,
     nvu_params_max_initial_step_corrections=20,
     # I dont really know how to tune this parameter
-    nvu_params_initial_step=0.5/0.1863**(1/3),
+    nvu_params_initial_step=0.5/1.863**(1/3),
     nvu_params_initial_step_if_high=1e-3,
     nvu_params_step=1,
     # nvu_params_save_path_u=True,
     nvu_params_raytracing_method="parabola-newton",
+    nvu_params_mode="reflection-mass_scaling",
 )
 ASD.temperature_eq = rp.make_function_ramp(  # type: ignore
     value0=10.000, x0=ASD.dt * ASD.steps * (1 / 8),
     value1=ASD.temperature, x1=ASD.dt * ASD.steps * (1 / 4))
 
+ASD_NO_SCALE = dataclasses.replace(
+    ASD, name="NVT_ASD_noscaling",
+    nvu_params_mode="reflection",
+    temperature_eq = rp.make_function_ramp(  # type: ignore
+        value0=10.000, x0=ASD.dt * ASD.steps * (1 / 8),
+        value1=ASD.temperature, x1=ASD.dt * ASD.steps * (1 / 4))
+)
+
+
+USE_BACKUP = {
+    "KA6": dataclasses.replace(KA_PARAMS[6], name="KA6.back"),
+}
 
 if __name__ == "__main__":
     parser = ArgumentParser()
