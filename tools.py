@@ -636,13 +636,12 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax1.hist(prod_dt[~np.isnan(prod_dt)], bins=20, color="black", alpha=.8)
     ax1.set_xlabel(r"$\Delta t$")
 
-    fig = plt.figure(figsize=(10, 8))
-    fig.suptitle(r"Correction to delta time so that $\Delta t' = \Delta t \cdot \frac{\alpha}{\cos \theta}$. $\alpha$ comp. of $\theta$")
-    ax0 = fig.add_subplot(2, 1, 1)
-    ax0.plot(prod_correction, color="black", alpha=.5)
-    ax1 = fig.add_subplot(2, 1, 2)
-    ax1.hist(prod_correction[~np.isnan(prod_correction)], color="black", alpha=.5)
-
+    # fig = plt.figure(figsize=(10, 8))
+    # fig.suptitle(r"Correction to delta time so that $\Delta t' = \Delta t \cdot \frac{\alpha}{\cos \theta}$. $\alpha$ comp. of $\theta$")
+    # ax0 = fig.add_subplot(2, 1, 1)
+    # ax0.plot(prod_correction, color="black", alpha=.5)
+    # ax1 = fig.add_subplot(2, 1, 2)
+    # ax1.hist(prod_correction[~np.isnan(prod_correction)], color="black", alpha=.5)
 
     fig = plt.figure(figsize=(10, 8))
     mean_its, std_its = np.mean(prod_its), np.std(prod_its)
@@ -657,38 +656,38 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax1.set_xlabel(r"iterations")
     ax1.grid()
 
-    if "path_u" in nvu_prod_output:
-        nblocks, nsaved_per_block, npoints, n = nvu_prod_output["path_u"][:].shape
-        path_u = nvu_prod_output["path_u"][:].reshape(nblocks*nsaved_per_block, npoints, n)
-        xs = path_u[:, :, 0].T  # (npoints, npaths)
-        ys = path_u[:, :, 1].T  # (npoints, npaths)
-        # Harmonic approximation:
-        u = np.arange(npoints)/(n - 1) - 0.5
-        p = np.polyfit(u, ys, 2)
-        y_pred = p[0, :] * u[:, np.newaxis]**2 + p[1, :] * u[:, np.newaxis] + p[2, :]
-        fig = plt.figure(figsize=(10, 8))
-        r2 = 1 - np.sum((y_pred - ys)**2) / np.sum((y_pred - y_pred.mean(axis=0))**2)
-        fig.suptitle(rf"$R^2 = {r2}$ when aproximating $U(\lambda)$ to a parabola")
-        ax = fig.add_subplot()
-        rsd = ((y_pred - ys)**2 / (ys - ys.mean(axis=0))**2).flatten()
-        ax.hist(rsd[(~np.isnan(rsd)) & (np.abs(rsd) < float("inf"))], bins=30, color="black", alpha=0.5)
-        # ax.plot(rsd, marker='.', markeredgewidth=0, linewidth=0, markersize=5,
-        #         color="black", alpha=0.5)
-        # ax.hist((y_pred/ys).flatten(), bins=20, color="black", alpha=0.5)
-
-    
-    fig = plt.figure(figsize=(10, 8))
-    mean_vf, std_vf = np.mean(prod_cos_v_f), np.std(prod_cos_v_f)
-    fig.suptitle(rf"$cos(v,\,f)$. $\mu={mean_vf:.03f}$; $\sigma={std_vf:.05f}={std_vf/mean_vf*100:.02f}\%$")
-    ax0 = fig.add_subplot(2, 1, 1)
-    ax1 = fig.add_subplot(2, 1, 2)
-    ax0.plot(prod_step, prod_cos_v_f, linewidth=1, color="black", alpha=.8)
-    ax0.set_ylabel(r"$cos(v,\,f)$")
-    ax0.set_xlabel(r"$step$")
-    ax0.grid()
-    ax1.hist(prod_cos_v_f[~np.isnan(prod_cos_v_f)], bins=20, color="black", alpha=.8)
-    ax1.set_xlabel(r"$cos(v,\,f)$")
-    ax1.grid()
+    # if "path_u" in nvu_prod_output:
+    #     nblocks, nsaved_per_block, npoints, n = nvu_prod_output["path_u"][:].shape
+    #     path_u = nvu_prod_output["path_u"][:].reshape(nblocks*nsaved_per_block, npoints, n)
+    #     xs = path_u[:, :, 0].T  # (npoints, npaths)
+    #     ys = path_u[:, :, 1].T  # (npoints, npaths)
+    #     # Harmonic approximation:
+    #     u = np.arange(npoints)/(n - 1) - 0.5
+    #     p = np.polyfit(u, ys, 2)
+    #     y_pred = p[0, :] * u[:, np.newaxis]**2 + p[1, :] * u[:, np.newaxis] + p[2, :]
+    #     fig = plt.figure(figsize=(10, 8))
+    #     r2 = 1 - np.sum((y_pred - ys)**2) / np.sum((y_pred - y_pred.mean(axis=0))**2)
+    #     fig.suptitle(rf"$R^2 = {r2}$ when aproximating $U(\lambda)$ to a parabola")
+    #     ax = fig.add_subplot()
+    #     rsd = ((y_pred - ys)**2 / (ys - ys.mean(axis=0))**2).flatten()
+    #     ax.hist(rsd[(~np.isnan(rsd)) & (np.abs(rsd) < float("inf"))], bins=30, color="black", alpha=0.5)
+    #     # ax.plot(rsd, marker='.', markeredgewidth=0, linewidth=0, markersize=5,
+    #     #         color="black", alpha=0.5)
+    #     # ax.hist((y_pred/ys).flatten(), bins=20, color="black", alpha=0.5)
+    #
+    # 
+    # fig = plt.figure(figsize=(10, 8))
+    # mean_vf, std_vf = np.mean(prod_cos_v_f), np.std(prod_cos_v_f)
+    # fig.suptitle(rf"$cos(v,\,f)$. $\mu={mean_vf:.03f}$; $\sigma={std_vf:.05f}={std_vf/mean_vf*100:.02f}\%$")
+    # ax0 = fig.add_subplot(2, 1, 1)
+    # ax1 = fig.add_subplot(2, 1, 2)
+    # ax0.plot(prod_step, prod_cos_v_f, linewidth=1, color="black", alpha=.8)
+    # ax0.set_ylabel(r"$cos(v,\,f)$")
+    # ax0.set_xlabel(r"$step$")
+    # ax0.grid()
+    # ax1.hist(prod_cos_v_f[~np.isnan(prod_cos_v_f)], bins=20, color="black", alpha=.8)
+    # ax1.set_xlabel(r"$cos(v,\,f)$")
+    # ax1.grid()
     
     fig = plt.figure(figsize=(10, 8))
     t_conf = prod_fsq / prod_lap
@@ -704,56 +703,56 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax1.set_xlabel(r"$k_BT_{conf}$")
     ax1.grid()
 
-    fig = plt.figure(figsize=(10, 8))
-    kappa = prod_lap / np.sqrt(prod_fsq)
-    mean_kappa, std_kappa = np.nanmean(kappa), np.nanstd(kappa)
-    fig.suptitle(rf"$\kappa$. $\mu={mean_kappa:.01f}$; $\sigma={std_kappa:.02f}={std_kappa/mean_kappa*100:.02f}\%$")
-    ax0 = fig.add_subplot(2, 1, 1)
-    ax1 = fig.add_subplot(2, 1, 2)
-    ax0.plot(prod_step, kappa, linewidth=1, color="black", alpha=.8)
-    ax0.set_ylabel(r"$\kappa$")
-    ax0.set_xlabel(r"$step$")
-    ax0.grid()
-    kappa_ok = kappa[(~np.isnan(kappa)) & (np.abs(kappa) < float("inf"))]
-    ax1.hist(kappa_ok, bins=20, color="black", alpha=.8)
-    ax1.set_xlabel(r"$\kappa$")
-    ax1.grid()
-
-    fig = plt.figure(figsize=(10, 8))
-    x, y = prod_dt, prod_cos_v_f
-    fig.suptitle(rf"Correlation: $\Delta t$ vs $\cos(v,\,f)$. $cov = {get_cov(x, y):.04f}$")
-    ax = fig.add_subplot()
-    ax.plot(x, y, linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="black", alpha=.8)
-    ax.set_xlabel(r"$\Delta t$")
-    ax.set_ylabel(r"$cos(v,\,f)$")
-    ax.grid()
-    
-    fig = plt.figure(figsize=(10, 8))
-    x, y = prod_dt, t_conf
-    fig.suptitle(rf"Correlation: $\Delta t$ vs $k_BT_{{conf}}$. $cov = {get_cov(x, y):.04f}$")
-    ax = fig.add_subplot()
-    ax.plot(x, y, linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="black", alpha=.8)
-    ax.set_xlabel(r"$\Delta t$")
-    ax.set_ylabel(r"$k_BT_{conf}$")
-    ax.grid()
-
-    fig = plt.figure(figsize=(10, 8))
-    x, y = prod_dt, kappa
-    fig.suptitle(rf"Correlation: $\Delta t$ vs $\kappa$. $cov = {get_cov(x, y):.04f}$")
-    ax = fig.add_subplot()
-    ax.plot(x, y, linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="black", alpha=.8)
-    ax.set_xlabel(r"$\Delta t$")
-    ax.set_ylabel(r"$\kappa$")
-    ax.grid()
-
-    fig = plt.figure(figsize=(10, 8))
-    x, y = prod_cos_v_f, kappa
-    fig.suptitle(rf"Correlation: $\cos(v,\,f)$ vs $\kappa$. $cov = {get_cov(x, y):.04f}$")
-    ax = fig.add_subplot()
-    ax.plot(x[~np.isnan(x)], y[~np.isnan(x)], linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="black", alpha=.8)
-    ax.set_xlabel(r"$\cos(v,\,f)$")
-    ax.set_ylabel(r"$\kappa$")
-    ax.grid()
+    # fig = plt.figure(figsize=(10, 8))
+    # kappa = prod_lap / np.sqrt(prod_fsq)
+    # mean_kappa, std_kappa = np.nanmean(kappa), np.nanstd(kappa)
+    # fig.suptitle(rf"$\kappa$. $\mu={mean_kappa:.01f}$; $\sigma={std_kappa:.02f}={std_kappa/mean_kappa*100:.02f}\%$")
+    # ax0 = fig.add_subplot(2, 1, 1)
+    # ax1 = fig.add_subplot(2, 1, 2)
+    # ax0.plot(prod_step, kappa, linewidth=1, color="black", alpha=.8)
+    # ax0.set_ylabel(r"$\kappa$")
+    # ax0.set_xlabel(r"$step$")
+    # ax0.grid()
+    # kappa_ok = kappa[(~np.isnan(kappa)) & (np.abs(kappa) < float("inf"))]
+    # ax1.hist(kappa_ok, bins=20, color="black", alpha=.8)
+    # ax1.set_xlabel(r"$\kappa$")
+    # ax1.grid()
+    #
+    # fig = plt.figure(figsize=(10, 8))
+    # x, y = prod_dt, prod_cos_v_f
+    # fig.suptitle(rf"Correlation: $\Delta t$ vs $\cos(v,\,f)$. $cov = {get_cov(x, y):.04f}$")
+    # ax = fig.add_subplot()
+    # ax.plot(x, y, linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="black", alpha=.8)
+    # ax.set_xlabel(r"$\Delta t$")
+    # ax.set_ylabel(r"$cos(v,\,f)$")
+    # ax.grid()
+    # 
+    # fig = plt.figure(figsize=(10, 8))
+    # x, y = prod_dt, t_conf
+    # fig.suptitle(rf"Correlation: $\Delta t$ vs $k_BT_{{conf}}$. $cov = {get_cov(x, y):.04f}$")
+    # ax = fig.add_subplot()
+    # ax.plot(x, y, linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="black", alpha=.8)
+    # ax.set_xlabel(r"$\Delta t$")
+    # ax.set_ylabel(r"$k_BT_{conf}$")
+    # ax.grid()
+    #
+    # fig = plt.figure(figsize=(10, 8))
+    # x, y = prod_dt, kappa
+    # fig.suptitle(rf"Correlation: $\Delta t$ vs $\kappa$. $cov = {get_cov(x, y):.04f}$")
+    # ax = fig.add_subplot()
+    # ax.plot(x, y, linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="black", alpha=.8)
+    # ax.set_xlabel(r"$\Delta t$")
+    # ax.set_ylabel(r"$\kappa$")
+    # ax.grid()
+    #
+    # fig = plt.figure(figsize=(10, 8))
+    # x, y = prod_cos_v_f, kappa
+    # fig.suptitle(rf"Correlation: $\cos(v,\,f)$ vs $\kappa$. $cov = {get_cov(x, y):.04f}$")
+    # ax = fig.add_subplot()
+    # ax.plot(x[~np.isnan(x)], y[~np.isnan(x)], linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="black", alpha=.8)
+    # ax.set_xlabel(r"$\cos(v,\,f)$")
+    # ax.set_ylabel(r"$\kappa$")
+    # ax.grid()
 
     nvu_eq_u, eq_dt, eq_its, eq_fsq, eq_lap, eq_cos_v_f, eq_time = \
         rp.extract_scalars(nvu_eq_output, ["U", "dt", "its", "Fsq", "lapU", "cos_v_f", "time", ], 
@@ -816,85 +815,85 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax1.set_xlabel(r"iterations")
     ax1.grid()
     
-    fig = plt.figure(figsize=(10, 8))
-    mean_vf, std_vf = np.mean(eq_cos_v_f), np.std(eq_cos_v_f)
-    fig.suptitle(rf"NVU EQ. $cos(v,\,f)$. $\mu={mean_vf:.03f}$; $\sigma={std_vf:.05f}={std_vf/mean_vf*100:.02f}\%$")
-    ax0 = fig.add_subplot(2, 1, 1)
-    ax1 = fig.add_subplot(2, 1, 2)
-    ax0.plot(eq_step, eq_cos_v_f, linewidth=1, color="black", alpha=.8)
-    ax0.set_ylabel(r"$cos(v,\,f)$")
-    ax0.set_xlabel(r"$step$")
-    ax0.grid()
-    ax1.hist(eq_cos_v_f, bins=20, color="black", alpha=.8)
-    ax1.set_xlabel(r"$cos(v,\,f)$")
-    ax1.grid()
-    
-    fig = plt.figure(figsize=(10, 8))
-    t_conf = eq_fsq / eq_lap
-    mean_t_conf, std_t_conf = np.nanmean(t_conf[np.abs(t_conf) < float("inf")]
-), np.nanstd(t_conf[np.abs(t_conf) < float("inf")]
-)
-    fig.suptitle(rf"NVU EQ. $k_BT_{{conf}}$. $\mu={mean_t_conf:.03f}$; $\sigma={std_t_conf:.04f}={std_t_conf/mean_t_conf*100:.02f}\%$")
-    ax0 = fig.add_subplot(2, 1, 1)
-    ax1 = fig.add_subplot(2, 1, 2)
-    ax0.plot(eq_step[np.abs(t_conf) < float("inf")], t_conf[np.abs(t_conf) < float("inf")], linewidth=1, color="black", alpha=.8)
-    ax0.set_ylabel(r"$k_BT_{conf}$")
-    ax0.set_xlabel(r"$step$")
-    ax0.grid()
-    ax1.hist(t_conf[np.abs(t_conf) < float("inf")], bins=20, color="black", alpha=.8)
-    ax1.set_xlabel(r"$k_BT_{conf}$")
-    ax1.grid()
-
-    fig = plt.figure(figsize=(10, 8))
-    kappa = eq_lap / np.sqrt(eq_fsq)
-    mean_kappa, std_kappa = np.nanmean(kappa), np.nanstd(kappa)
-    fig.suptitle(rf"NVU EQ. $\kappa$. $\mu={mean_kappa:.01f}$; $\sigma={std_kappa:.02f}={std_kappa/mean_kappa*100:.02f}\%$")
-    ax0 = fig.add_subplot(2, 1, 1)
-    ax1 = fig.add_subplot(2, 1, 2)
-    ax0.plot(eq_step, kappa, linewidth=1, color="black", alpha=.8)
-    ax0.set_ylabel(r"$\kappa$")
-    ax0.set_xlabel(r"$step$")
-    ax0.grid()
-    kappa_ok = kappa[(~np.isnan(kappa)) & (np.abs(kappa) < float("inf"))]
-    ax1.hist(kappa_ok, bins=20, color="black", alpha=.8)
-    ax1.set_xlabel(r"$\kappa$")
-    ax1.grid()
-
-    fig = plt.figure(figsize=(10, 8))
-    x, y = eq_dt, eq_cos_v_f
-    fig.suptitle(rf"NVU EQ. Correlation: $\Delta t$ vs $\cos(v,\,f)$. $cov = {get_cov(x, y):.04f}$")
-    ax = fig.add_subplot()
-    ax.plot(x, y, linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="black", alpha=.8)
-    ax.set_xlabel(r"$\Delta t$")
-    ax.set_ylabel(r"$cos(v,\,f)$")
-    ax.grid()
-    
-    fig = plt.figure(figsize=(10, 8))
-    x, y = eq_dt, t_conf
-    fig.suptitle(rf"NVU EQ. Correlation: $\Delta t$ vs $k_BT_{{conf}}$. $cov = {get_cov(x, y):.04f}$")
-    ax = fig.add_subplot()
-    ax.plot(x, y, linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="black", alpha=.8)
-    ax.set_xlabel(r"$\Delta t$")
-    ax.set_ylabel(r"$k_BT_{conf}$")
-    ax.grid()
-
-    fig = plt.figure(figsize=(10, 8))
-    x, y = eq_dt, kappa
-    fig.suptitle(rf"NVU EQ. Correlation: $\Delta t$ vs $\kappa$. $cov = {get_cov(x, y):.04f}$")
-    ax = fig.add_subplot()
-    ax.plot(x, y, linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="black", alpha=.8)
-    ax.set_xlabel(r"$\Delta t$")
-    ax.set_ylabel(r"$\kappa$")
-    ax.grid()
-
-    fig = plt.figure(figsize=(10, 8))
-    x, y = eq_cos_v_f, kappa
-    fig.suptitle(rf"NVU EQ. Correlation: $\cos(v,\,f)$ vs $\kappa$. $cov = {get_cov(x, y):.04f}$")
-    ax = fig.add_subplot()
-    ax.plot(x, y, linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="black", alpha=.8)
-    ax.set_xlabel(r"$\cos(v,\,f)$")
-    ax.set_ylabel(r"$\kappa$")
-    ax.grid()
+#     fig = plt.figure(figsize=(10, 8))
+#     mean_vf, std_vf = np.mean(eq_cos_v_f), np.std(eq_cos_v_f)
+#     fig.suptitle(rf"NVU EQ. $cos(v,\,f)$. $\mu={mean_vf:.03f}$; $\sigma={std_vf:.05f}={std_vf/mean_vf*100:.02f}\%$")
+#     ax0 = fig.add_subplot(2, 1, 1)
+#     ax1 = fig.add_subplot(2, 1, 2)
+#     ax0.plot(eq_step, eq_cos_v_f, linewidth=1, color="black", alpha=.8)
+#     ax0.set_ylabel(r"$cos(v,\,f)$")
+#     ax0.set_xlabel(r"$step$")
+#     ax0.grid()
+#     ax1.hist(eq_cos_v_f, bins=20, color="black", alpha=.8)
+#     ax1.set_xlabel(r"$cos(v,\,f)$")
+#     ax1.grid()
+#     
+#     fig = plt.figure(figsize=(10, 8))
+#     t_conf = eq_fsq / eq_lap
+#     mean_t_conf, std_t_conf = np.nanmean(t_conf[np.abs(t_conf) < float("inf")]
+# ), np.nanstd(t_conf[np.abs(t_conf) < float("inf")]
+# )
+#     fig.suptitle(rf"NVU EQ. $k_BT_{{conf}}$. $\mu={mean_t_conf:.03f}$; $\sigma={std_t_conf:.04f}={std_t_conf/mean_t_conf*100:.02f}\%$")
+#     ax0 = fig.add_subplot(2, 1, 1)
+#     ax1 = fig.add_subplot(2, 1, 2)
+#     ax0.plot(eq_step[np.abs(t_conf) < float("inf")], t_conf[np.abs(t_conf) < float("inf")], linewidth=1, color="black", alpha=.8)
+#     ax0.set_ylabel(r"$k_BT_{conf}$")
+#     ax0.set_xlabel(r"$step$")
+#     ax0.grid()
+#     ax1.hist(t_conf[np.abs(t_conf) < float("inf")], bins=20, color="black", alpha=.8)
+#     ax1.set_xlabel(r"$k_BT_{conf}$")
+#     ax1.grid()
+#
+#     fig = plt.figure(figsize=(10, 8))
+#     kappa = eq_lap / np.sqrt(eq_fsq)
+#     mean_kappa, std_kappa = np.nanmean(kappa), np.nanstd(kappa)
+#     fig.suptitle(rf"NVU EQ. $\kappa$. $\mu={mean_kappa:.01f}$; $\sigma={std_kappa:.02f}={std_kappa/mean_kappa*100:.02f}\%$")
+#     ax0 = fig.add_subplot(2, 1, 1)
+#     ax1 = fig.add_subplot(2, 1, 2)
+#     ax0.plot(eq_step, kappa, linewidth=1, color="black", alpha=.8)
+#     ax0.set_ylabel(r"$\kappa$")
+#     ax0.set_xlabel(r"$step$")
+#     ax0.grid()
+#     kappa_ok = kappa[(~np.isnan(kappa)) & (np.abs(kappa) < float("inf"))]
+#     ax1.hist(kappa_ok, bins=20, color="black", alpha=.8)
+#     ax1.set_xlabel(r"$\kappa$")
+#     ax1.grid()
+#
+#     fig = plt.figure(figsize=(10, 8))
+#     x, y = eq_dt, eq_cos_v_f
+#     fig.suptitle(rf"NVU EQ. Correlation: $\Delta t$ vs $\cos(v,\,f)$. $cov = {get_cov(x, y):.04f}$")
+#     ax = fig.add_subplot()
+#     ax.plot(x, y, linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="black", alpha=.8)
+#     ax.set_xlabel(r"$\Delta t$")
+#     ax.set_ylabel(r"$cos(v,\,f)$")
+#     ax.grid()
+#     
+#     fig = plt.figure(figsize=(10, 8))
+#     x, y = eq_dt, t_conf
+#     fig.suptitle(rf"NVU EQ. Correlation: $\Delta t$ vs $k_BT_{{conf}}$. $cov = {get_cov(x, y):.04f}$")
+#     ax = fig.add_subplot()
+#     ax.plot(x, y, linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="black", alpha=.8)
+#     ax.set_xlabel(r"$\Delta t$")
+#     ax.set_ylabel(r"$k_BT_{conf}$")
+#     ax.grid()
+#
+#     fig = plt.figure(figsize=(10, 8))
+#     x, y = eq_dt, kappa
+#     fig.suptitle(rf"NVU EQ. Correlation: $\Delta t$ vs $\kappa$. $cov = {get_cov(x, y):.04f}$")
+#     ax = fig.add_subplot()
+#     ax.plot(x, y, linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="black", alpha=.8)
+#     ax.set_xlabel(r"$\Delta t$")
+#     ax.set_ylabel(r"$\kappa$")
+#     ax.grid()
+#
+#     fig = plt.figure(figsize=(10, 8))
+#     x, y = eq_cos_v_f, kappa
+#     fig.suptitle(rf"NVU EQ. Correlation: $\cos(v,\,f)$ vs $\kappa$. $cov = {get_cov(x, y):.04f}$")
+#     ax = fig.add_subplot()
+#     ax.plot(x, y, linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="black", alpha=.8)
+#     ax.set_xlabel(r"$\cos(v,\,f)$")
+#     ax.set_ylabel(r"$\kappa$")
+#     ax.grid()
 
 
 

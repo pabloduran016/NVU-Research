@@ -151,6 +151,8 @@ def method(rdf_new: Set[str], rdf_all: bool) -> None:
     n1 = output_n1.prod_output["block"].shape[3]
     output_n2 = get_output(LJ_N2, rdf_new=LJ_N2.name in rdf_new or rdf_all)
     n2 = output_n2.prod_output["block"].shape[3]
+    output_n3 = get_output(LJ_N3, rdf_new=LJ_N3.name in rdf_new or rdf_all)
+    n3 = output_n3.prod_output["block"].shape[3]
     n0_dt = get_delta_time(output_n0.prod_output)
     n0_steps = get_steps(output_n0.prod_output)
     n1_dt = get_delta_time(output_n1.prod_output)
@@ -319,10 +321,10 @@ def method(rdf_new: Set[str], rdf_all: bool) -> None:
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot()
     for (i, params, output, n) in zip(
-        range(3), 
-        (LJ_N0, LJ_N1, LJ_N2),
-        (output_n0, output_n1, output_n2),
-        (n0, n1, n2)
+        range(4), 
+        (LJ_N0, LJ_N1, LJ_N2, LJ_N3),
+        (output_n0, output_n1, output_n2, output_n3),
+        (n0, n1, n2, n3)
     ):
         msd = get_msd(output.prod_output)[:, 0]
         dt = get_delta_time_from_msd(msd, params.temperature)
@@ -773,6 +775,7 @@ LJ_N3 = dataclasses.replace(
     name="LJ_N3",
     cells=[16, 16, 16],
 )
+# From this amount of particles on, needs gridsync, which is not implemented
 LJ_N4 = dataclasses.replace(
     LJ_N0,
     name="LJ_N4",
@@ -884,7 +887,7 @@ for i in range(1, len(KA_TEMPERATURES)):
     elif i == 5:
         order = 30
     else:
-        order = 32
+        order = 34
     p = dataclasses.replace(
         KA0,
         name=f"KA{i}",
@@ -900,6 +903,15 @@ for i in range(1, len(KA_TEMPERATURES)):
         scalar_output=2**(order - 12),
     )
     KA_PARAMS.append(p)
+
+dataclasses.replace(
+    KA_PARAMS[6],
+    name=f"KA6_1024",
+    steps=2**30,
+    cells=[4, 8, 8],
+    steps_per_timeblock=2**25,
+    scalar_output=2**(30 - 12),
+)
 
 dataclasses.replace(
     KA_PARAMS[6],
