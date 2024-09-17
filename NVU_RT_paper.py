@@ -73,16 +73,16 @@ def get_output(params: SimulationParameters, rdf_new: bool) -> Output:
         raise ValueError("Expected vs NVE or vs NVT")
 
     print(f"Loading {kind} production output from path `{other_output_path}`")
-    other_prod_output = rp.tools.load_output(other_output_path)
+    other_prod_output = rp.tools.load_output(other_output_path).get_h5()
     print(f"Loading NVU EQ initial configuration from path `{eq_conf0_path}`")
     eq_conf0, target_u = load_conf_from_npz(eq_conf0_path)
 
     print(f"Loading NVU EQ output from path `{params.nvu_eq_output}`")
-    nvu_eq_output = rp.tools.load_output(params.nvu_eq_output)
+    nvu_eq_output = rp.tools.load_output(params.nvu_eq_output).get_h5()
     print(f"Loading NVU PROD initial configuration from path `{params.nvu_eq_conf_output}`")
     prod_conf0, _target_u = load_conf_from_npz(params.nvu_eq_conf_output)
     print(f"Loading NVU PROD output from path `{params.nvu_output}`")
-    nvu_prod_output = rp.tools.load_output(params.nvu_output)
+    nvu_prod_output = rp.tools.load_output(params.nvu_output).get_h5()
 
     conf_per_block = math.floor(512 / nvu_prod_output["block"].shape[0])
     if rdf_new or not os.path.exists(params.other_prod_rdf):
@@ -883,9 +883,9 @@ for i in range(1, len(KA_TEMPERATURES)):
     if i <= 3:
         order = 25
     elif i == 4:
-        order = 28
-    elif i == 5:
         order = 30
+    elif i == 5:
+        order = 31
     else:
         order = 34
     p = dataclasses.replace(
@@ -903,15 +903,6 @@ for i in range(1, len(KA_TEMPERATURES)):
         scalar_output=2**(order - 12),
     )
     KA_PARAMS.append(p)
-
-dataclasses.replace(
-    KA_PARAMS[6],
-    name=f"KA6_1024",
-    steps=2**30,
-    cells=[4, 8, 8],
-    steps_per_timeblock=2**25,
-    scalar_output=2**(30 - 12),
-)
 
 dataclasses.replace(
     KA_PARAMS[6],
@@ -1018,7 +1009,8 @@ ASD_NO_SCALE = dataclasses.replace(
 
 
 USE_BACKUP = {
-    "KA6": dataclasses.replace(KA_PARAMS[6], name="KA6.back"),
+    # "KA6": dataclasses.replace(KA_PARAMS[6], name="KA6.back2"),
+    "KA6": KNOWN_SIMULATIONS["KA6_short"]
 }
 
 if __name__ == "__main__":

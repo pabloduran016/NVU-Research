@@ -85,7 +85,7 @@ def run_NVTorNVE(params: "SimulationParameters") -> None:
         print("block=", block, sim.status(per_particle=True))
     print(sim.summary())
 
-    other_output_prod = rp.tools.load_output(prod_output)
+    other_output_prod = rp.tools.load_output(prod_output).get_h5()
     positions = other_output_prod["block"][:, :, 0, :, :]
     _, _, _n, d = positions.shape
     u, = rp.extract_scalars(other_output_prod, ["U"], first_block=0, D=d)
@@ -99,7 +99,7 @@ def run_NVTorNVE(params: "SimulationParameters") -> None:
         scalar_output="none",  # type: ignore
         verbose=True)
     for block in sim.timeblocks():
-        ev = rp.Evaluater(conf, pair_p)
+        ev = rp.Evaluator(conf, pair_p)
         ev.evaluate()
         conf_u = np.sum(conf["u"])
         if conf_u <= target_u:
@@ -125,7 +125,7 @@ def run_NVU_RT(params: "SimulationParameters", do_nvu_eq: bool) -> None:
         return
 
     # target_u = np.mean(u)
-    other_prod_output = rp.tools.load_output(prod_output)
+    other_prod_output = rp.tools.load_output(prod_output).get_h5()
     conf, target_u = load_conf_from_npz(conf_output)
     integrator = rp.integrators.NVU_RT(
         target_u=target_u,
@@ -153,7 +153,6 @@ def run_NVU_RT(params: "SimulationParameters", do_nvu_eq: bool) -> None:
             storage=params.nvu_eq_output,
             scalar_output=params.scalar_output,
             verbose=True,
-            save_time=True,
         )
         for block in sim.timeblocks():
             print("block=", block, sim.status(per_particle=True))
@@ -169,7 +168,6 @@ def run_NVU_RT(params: "SimulationParameters", do_nvu_eq: bool) -> None:
         storage=params.nvu_output, 
         scalar_output=params.scalar_output,
         verbose=True,
-        save_time=True,
     )
     for block in sim.timeblocks():
         print("block=", block, sim.status(per_particle=True))
@@ -451,7 +449,7 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     else:
         raise ValueError("Expected vs NVE or vs NVT")
     
-    other_prod_output = rp.tools.load_output(other_prod_output_path)
+    other_prod_output = rp.tools.load_output(other_prod_output_path).get_h5()
 
     _, _, _, n, d = other_prod_output["block"].shape
 
@@ -486,8 +484,8 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
         print("WARNING: NVU PROD output not found", file=sys.stderr)
         return
 
-    nvu_prod_output = rp.tools.load_output(params.nvu_output)
-    nvu_eq_output = rp.tools.load_output(params.nvu_eq_output)
+    nvu_prod_output = rp.tools.load_output(params.nvu_output).get_h5()
+    nvu_eq_output = rp.tools.load_output(params.nvu_eq_output).get_h5()
     nblocks, _, _, _, _ = nvu_prod_output["block"].shape
 
     nvu_prod_u, prod_dt, prod_its, prod_fsq, prod_lap, prod_cos_v_f, prod_time, = \
@@ -615,9 +613,8 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax = fig.add_subplot()
     res = stats.linregress(prod_step, prod_time)
     xs = np.linspace(np.min(prod_step), np.max(prod_step))
-    ax.plot(xs, xs * res.slope + res.intercept, ':', color="red", alpha=.5, label=rf"m = {res.slope}")  # type: ignore
-    ax.plot(prod_step, prod_time, '--', color="black", alpha=.5, label="scalar time")
-    ax.plot(step_conf, nvu_prod_output["time"][:].flatten(), linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="blue", alpha=.5, label="conf time")
+    ax.plot(xs, xs * res.slope + res.intercept, '--', color="black", alpha=.5, label=rf"m = {res.slope}")  # type: ignore
+    ax.plot(prod_step, prod_time, 'o', markersize=5, linewidth=0, color="red", alpha=.5, label="scalar time")
     ax.grid()
     ax.legend()
     ax.set_title(r"$t(step)$")
@@ -781,9 +778,8 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax = fig.add_subplot()
     res = stats.linregress(eq_step, eq_time)
     xs = np.linspace(np.min(eq_step), np.max(eq_step))
-    ax.plot(xs, xs * res.slope + res.intercept, ':', color="red", alpha=.5, label=rf"m = {res.slope}")  # type: ignore
-    ax.plot(eq_step, eq_time, '--', color="black", alpha=.5, label="scalar time")
-    ax.plot(step_conf, nvu_eq_output["time"][1:, :].flatten(), linewidth=0, marker='.', markersize=5, markeredgewidth=0, color="blue", alpha=.5, label="conf time")
+    ax.plot(xs, xs * res.slope + res.intercept, '--', color="black", alpha=.5, label=rf"m = {res.slope}")  # type: ignore
+    ax.plot(eq_step, eq_time, 'o', markersize=5, linewidth=0, color="red", alpha=.5, label="scalar time")
     ax.grid()
     ax.legend()
     ax.set_title(r"$t(step)$")
