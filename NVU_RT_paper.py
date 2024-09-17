@@ -1007,6 +1007,50 @@ ASD_NO_SCALE = dataclasses.replace(
         value1=ASD.temperature, x1=ASD.dt * ASD.steps * (1 / 4))
 )
 
+T1 = SimulationVsNVT(
+    name="T1",
+    description=
+"""Test delta time and dynamics dependance on system size""",
+    root_folder=DATA_ROOT_FOLDER,
+    rho=0.85,
+    steps=2**20,
+    steps_per_timeblock=2**15,
+    scalar_output=2**8,
+    temperature=0.44,
+    tau=0.2,
+    dt=0.005,
+    cells=[4, 8, 8],
+
+    pair_potential_name="LJ",
+    pair_potential_params={ "eps": 1, "sig": 1, "cut": 2.5},
+    nvu_params_max_abs_val=2,
+    nvu_params_threshold=1e-6,
+    nvu_params_eps=1e-7,
+    nvu_params_max_steps=20,
+    nvu_params_max_initial_step_corrections=20,
+    nvu_params_initial_step=0.5/0.85**(1/3),
+    nvu_params_initial_step_if_high=1,
+    nvu_params_step=1,
+    nvu_params_mode="reflection",
+    nvu_params_save_path_u=True,
+    nvu_params_raytracing_method="parabola",
+)
+dataclasses.replace(
+    T1,
+    name="T2",
+    cells=[8, 8, 8]
+)
+dataclasses.replace(
+    T1,
+    name="T4",
+    cells=[16, 8, 8]
+)
+dataclasses.replace(
+    T1,
+    name="T8",
+    cells=[16, 16, 8]
+)
+
 
 USE_BACKUP = {
     # "KA6": dataclasses.replace(KA_PARAMS[6], name="KA6.back2"),
