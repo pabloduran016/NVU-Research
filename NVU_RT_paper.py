@@ -370,54 +370,58 @@ def method(rdf_new: Set[str], rdf_all: bool) -> None:
     
 
 def delta_time_vs_n() -> None:
-    fig = plt.figure(figsize=(8, 4))
-    ax = fig.add_subplot()
-    delta_times = {}
-    for (i, params) in enumerate(T_PARAMS):
-        output = Output(params)
-        try:
-            n = output.prod_output["block"].shape[3]
-            if n not in delta_times:
-                delta_times[n] = []
-            msd = get_msd(output.prod_output)[:, 0]
-            dt = get_delta_time_from_msd(msd, params.temperature)
-            delta_times[n].append(dt)
-        except Exception as e:
-            # traceback.print_exc()
-            print("ERROR:", e)
-            pass
-    
-    # Confidence of 1 - alpha
-    alpha = .01
-    for n, dts in delta_times.items():
-        dt_mean = np.mean(dts)
-        dt_std = np.std(dts)
-        df = len(dts) - 1
-        t = stats.t.ppf(1 - alpha/2, df)
-        dt_delta = dt_std * t / np.sqrt(len(dts))
-        ax.plot(np.zeros(len(dts)) + n, dts, ".", linewidth=0, 
-                 markeredgewidth=1, markersize=10, markeredgecolor="black",
-                 alpha=.2)
-        # print(dt_mean, dt_std, dt_delta)
-        ax.errorbar(
-            n, dt_mean, yerr=dt_delta, fmt=".",
-            capsize=2, capthick=1.5, elinewidth=1,
-            color="black",
-            markersize=3, markeredgecolor="black",
-            alpha=.8, label=f"NVU RT $N={n}$"
-        )
+    for (t_params, file) in (
+        (T_PARAMS_temp1, FIG_DT_VS_N_TEMP_1),
+        (T_PARAMS_temp044, FIG_DT_VS_N_TEMP_044),
+    ):
+        fig = plt.figure(figsize=(8, 4))
+        ax = fig.add_subplot()
+        delta_times = {}
+        for (i, params) in enumerate(t_params):
+            output = Output(params)
+            try:
+                n = output.prod_output["block"].shape[3]
+                if n not in delta_times:
+                    delta_times[n] = []
+                msd = get_msd(output.prod_output)[:, 0]
+                dt = get_delta_time_from_msd(msd, params.temperature)
+                delta_times[n].append(dt)
+            except Exception as e:
+                # traceback.print_exc()
+                print("ERROR:", e)
+                pass
+        
+        # Confidence of 1 - alpha
+        alpha = .01
+        for n, dts in delta_times.items():
+            dt_mean = np.mean(dts)
+            dt_std = np.std(dts)
+            df = len(dts) - 1
+            t = stats.t.ppf(1 - alpha/2, df)
+            dt_delta = dt_std * t / np.sqrt(len(dts))
+            ax.plot(np.zeros(len(dts)) + n, dts, ".", linewidth=0, 
+                     markeredgewidth=1, markersize=10, markeredgecolor="black",
+                     alpha=.2)
+            # print(dt_mean, dt_std, dt_delta)
+            ax.errorbar(
+                n, dt_mean, yerr=dt_delta, fmt=".",
+                capsize=2, capthick=1.5, elinewidth=1,
+                color="black",
+                markersize=3, markeredgecolor="black",
+                alpha=.8, label=f"NVU RT $N={n}$"
+            )
 
 
-    t = ax.annotate(
-        rf"temperature = ${T1.temperature}$""\n"
-        rf"$\rho$ = ${T1.rho}$", 
-        (0.25, 0.15), xycoords="axes fraction")
-    t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
-    ax.set_xlabel(r"$N$")
-    ax.set_ylabel("$\Delta t$")
-    ax.grid(alpha=.3)
+        t = ax.annotate(
+            rf"temperature = ${t_params[0].temperature}$""\n"
+            rf"$\rho$ = ${t_params[0].rho}$", 
+            (0.25, 0.15), xycoords="axes fraction")
+        t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
+        ax.set_xlabel(r"$N$")
+        ax.set_ylabel("$\Delta t$")
+        ax.grid(alpha=.3)
 
-    fig.savefig(FIG_DT_VS_N)
+        fig.savefig(file)
     plt.close(fig)
 
 
@@ -795,7 +799,8 @@ if not os.path.exists(FIG_ROOT_FOLDER):
 FIG_DT_OVER_STEPS = os.path.join(FIG_ROOT_FOLDER, "dt_over_steps.svg")
 FIG_DT_CORRECTION = os.path.join(FIG_ROOT_FOLDER, "dt_correction.svg")
 FIG_DT_HIST = os.path.join(FIG_ROOT_FOLDER, "dt_hist.svg")
-FIG_DT_VS_N = os.path.join(FIG_ROOT_FOLDER, "dt_vs_n.svg")
+FIG_DT_VS_N_TEMP_1 = os.path.join(FIG_ROOT_FOLDER, "dt_vs_n_temp_1.svg")
+FIG_DT_VS_N_TEMP_044 = os.path.join(FIG_ROOT_FOLDER, "dt_vs_n_temp_0.44.svg")
 FIG_PARABOLAS = os.path.join(FIG_ROOT_FOLDER, "parabolas.svg")
 FIG_PARABOLAS_AB = os.path.join(FIG_ROOT_FOLDER, "parabolas_ab.svg")
 FIG_PARABOLAS_RELATIVE_ERROR = os.path.join(FIG_ROOT_FOLDER, "parabolas_relative_error.svg")
@@ -1153,22 +1158,25 @@ for params in (T1, T2, T4, T6, T8, ):
             name=params.name+f"_{i}"
         ))
 
+USE_BACKUP = {
+    # "KA6": dataclasses.replace(KA_PARAMS[6], name="KA6.back2"),
+    "KA6": KNOWN_SIMULATIONS["KA6_short"],
+}
+
 T_PARAMS_temp1 = []
 for params in T_PARAMS_temp044 :
+    name = params.name+f"_0.44"
     T_PARAMS_temp1.append(dataclasses.replace(
         params,
-        name=params.name+f"_0.44",
+        name=name,
         root_folder="paper-output/TestDT_T0.44",
         steps=2**23,
         steps_per_timeblock=2**18,
         scalar_output=2**11,
     ))
+    USE_BACKUP[name] = params
 
 
-USE_BACKUP = {
-    # "KA6": dataclasses.replace(KA_PARAMS[6], name="KA6.back2"),
-    "KA6": KNOWN_SIMULATIONS["KA6_short"],
-}
 # for params in T_PARAMS:
 #     USE_BACKUP[params.name] = dataclasses.replace(
 #         params, 
