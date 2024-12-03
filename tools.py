@@ -229,6 +229,8 @@ class SimulationParameters:
     nvu_params_raytracing_method: Literal["parabola", "parabola-newton", "bisection"] = "parabola"
     nvu_params_float_type: Literal["32", "64"] = "64"
 
+    hidden: bool = False
+
     nvu_eq_conf_output = property(lambda self: os.path.join(self.folder, "nvu-rt_eq.npz"))
     nvu_eq_output = property(lambda self: os.path.join(self.folder, "nvu-rt_eq.h5"))
     nvu_output = property(lambda self: os.path.join(self.folder, "nvu-rt_prod.h5"))
@@ -240,11 +242,11 @@ class SimulationParameters:
 
     def __post_init__(self) -> None:
         self.num_timeblocks = self.steps//self.steps_per_timeblock
+        if not self.hidden:
+            if self.name in KNOWN_SIMULATIONS:
+                raise ValueError(f"Simulation with name `{self.name}` already exists")
 
-        if self.name in KNOWN_SIMULATIONS:
-            raise ValueError(f"Simulation with name `{self.name}` already exists")
-
-        KNOWN_SIMULATIONS[self.name] = self
+            KNOWN_SIMULATIONS[self.name] = self
 
     def init(self) -> None:
         if not os.path.exists(self.folder):
@@ -795,7 +797,7 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax0.set_ylabel(r"$\Delta t$")
     ax0.set_xlabel(r"$step$")
     ax0.grid()
-    ax1.hist(eq_dt, bins=20, color="black", alpha=.8)
+    #ax1.hist(eq_dt, bins=20, color="black", alpha=.8)
     ax1.set_xlabel(r"$\Delta t$")
 
     fig = plt.figure(figsize=(10, 8))

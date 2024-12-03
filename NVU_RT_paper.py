@@ -30,6 +30,7 @@ from tools import KNOWN_SIMULATIONS, SimulationParameters, SimulationVsNVE, Simu
     load_conf_from_npz
 import numpy as np
 import numpy.typing as npt
+from scipy import stats
 
 
 plt.style.use("./science.mplstyle")
@@ -37,16 +38,113 @@ plt.style.use("./science.mplstyle")
 
 FloatArray = npt.NDArray[np.float32]
 
+
 @dataclass
 class Output:
-    target_u: float
-    other_prod_output: Dict[str, Any]
-    eq_conf0: rp.Configuration
-    eq_output: Dict[str, Any]
-    prod_conf0: rp.Configuration
-    prod_output: Dict[str, Any]
-    prod_rdf: Dict[str, Any]
-    other_prod_rdf: Dict[str, Any]
+    params: Union[SimulationVsNVT, SimulationVsNVE]
+    rdf_new: bool = False
+    _target_u: Optional[float] = None
+    _other_prod_output: Optional[Dict[str, Any]] = None
+    _eq_conf0: Optional[rp.Configuration] = None
+    _eq_output: Optional[Dict[str, Any]] = None
+    _prod_conf0: Optional[rp.Configuration] = None
+    _prod_output: Optional[Dict[str, Any]] = None
+    _prod_rdf: Optional[Dict[str, Any]] = None
+    _other_prod_rdf: Optional[Dict[str, Any]] = None
+
+    def __post_init__(self) -> None:
+        if self.params.name in USE_BACKUP:
+            self.params = USE_BACKUP[self.params.name]
+
+        if type(self.params) not in (SimulationVsNVT, SimulationVsNVE):
+            raise ValueError("Expected vs NVE or vs NVT")
+
+    @property
+    def target_u(self) -> rp.Configuration:
+        if self._target_u is not None:
+            return self._target_u
+        eq_conf0_path = self.params.nvt_conf_output \
+            if type(self.params) == SimulationVsNVT else self.params.nve_conf_output
+        _, self._target_u = load_conf_from_npz(eq_conf0_path)
+        return self._target_u
+
+    @property
+    def other_prod_output(self) -> Dict[str, Any]:
+        if self._other_prod_output is not None:
+            return self._other_prod_output
+        other_output_path = self.params.nvt_output \
+            if type(self.params) == SimulationVsNVT else self.params.nve_output
+        kind = "NVT" if type(self.params) == SimulationVsNVT else "NVE"
+        # print(f"Loading {kind} production output from path `{other_output_path}`")
+        self._other_prod_output = rp.tools.load_output(other_output_path).get_h5()
+        return self._other_prod_output
+
+    @property
+    def eq_conf0(self) -> rp.Configuration:
+        if self._eq_conf0 is not None:
+            return self._eq_conf0
+        eq_conf0_path = self.params.nvt_conf_output \
+            if type(self.params) == SimulationVsNVT else self.params.nve_conf_output
+        # print(f"Loading NVU EQ initial configuration from path `{eq_conf0_path}`")
+        self._eq_conf0, _ = load_conf_from_npz(eq_conf0_path)
+        return self._eq_conf0
+
+    @property
+    def eq_output(self) -> Dict[str, Any]:
+        if self._eq_output is not None:
+            return self._eq_output
+        # print(f"Loading NVU EQ output from path `{self.params.nvu_eq_output}`")
+        self._eq_output = rp.tools.load_output(self.params.nvu_eq_output).get_h5()
+        u, = rp.extract_scalars(self._eq_output, ["U"])
+        if np.any(np.abs((u - self.target_u) / self.target_u) > 10*self.params.nvu_params_threshold):
+            print(f"WARNING: NVU EQ output for run `{self.params.name}` has probably failed: (u - u0) / u0 > threshold", file=sys.stderr)
+        return self._eq_output  # type: ignore
+
+    @property
+    def prod_conf0(self) -> rp.Configuration:
+        if self._prod_conf0 is not None:
+            return self._prod_conf0
+        # print(f"Loading NVU PROD initial configuration from path `{self.params.nvu_eq_conf_output}`")
+        self._prod_conf0, _ = load_conf_from_npz(self.params.nvu_eq_conf_output)
+        return self._prod_conf0
+
+    @property
+    def prod_output(self) -> Dict[str, Any]:
+        if self._prod_output is not None:
+            return self._prod_output
+        # print(f"Loading NVU PROD output from path `{self.params.nvu_output}`")
+        self._prod_output = rp.tools.load_output(self.params.nvu_output).get_h5()
+        u, = rp.extract_scalars(self._prod_output, ["U"])
+        if np.any(np.abs((u - self.target_u) / self.target_u) > 10*self.params.nvu_params_threshold):
+            print(f"WARNING: NVU PROD output for run `{self.params.name}` has probably failed: (u - u0) / u0 > threshold", file=sys.stderr)
+        return self._prod_output  # type: ignore
+
+    @property
+    def prod_rdf(self) -> Dict[str, Any]:
+        if self._prod_rdf is not None:
+            return self._prod_rdf
+        # print("Calculating NVU PROD rdf")
+        conf_per_block = math.floor(512 / self.prod_output["block"].shape[0])
+        if self.rdf_new or not os.path.exists(self.params.nvu_prod_rdf):
+            self._prod_rdf = calculate_rdf(self.prod_output, conf_per_block)
+            np.savez(self.params.nvu_prod_rdf, **self.prod_rdf)
+        else:
+            self._prod_rdf = np.load(self.params.nvu_prod_rdf)
+        return self._prod_rdf  # type: ignore
+
+    @property
+    def other_prod_rdf(self) -> Dict[str, Any]:
+        if self._other_prod_rdf is not None:
+            return self._other_prod_rdf
+        kind = "NVT" if type(self.params) == SimulationVsNVT else "NVE"
+        # print(f"Calculating {kind} PROD rdf")
+        conf_per_block = math.floor(512 / self.prod_output["block"].shape[0])
+        if self.rdf_new or not os.path.exists(self.params.other_prod_rdf):
+            self._other_prod_rdf = calculate_rdf(self.other_prod_output, conf_per_block)
+            np.savez(self.params.other_prod_rdf, **self._other_prod_rdf)
+        else:
+            self._other_prod_rdf = np.load(self.params.other_prod_rdf)
+        return self._other_prod_rdf
 
 
 def scientific_notation(v: Union[float, np.float32], n: int) -> str:
@@ -54,59 +152,6 @@ def scientific_notation(v: Union[float, np.float32], n: int) -> str:
     s = s.replace("e", r"\cdot 10^{")
     s = s + "}"
     return s
-
-
-def get_output(params: SimulationParameters, rdf_new: bool) -> Output:
-    if params.name in USE_BACKUP:
-        params = USE_BACKUP[params.name]
-    params.init()
-
-    if type(params) == SimulationVsNVT:
-        kind = "NVT"
-        other_output_path = params.nvt_output
-        eq_conf0_path = params.nvt_conf_output
-    elif type(params) == SimulationVsNVE:
-        kind = "NVE"
-        other_output_path = params.nve_output
-        eq_conf0_path = params.nve_conf_output
-    else:
-        raise ValueError("Expected vs NVE or vs NVT")
-
-    print(f"Loading {kind} production output from path `{other_output_path}`")
-    other_prod_output = rp.tools.load_output(other_output_path).get_h5()
-    print(f"Loading NVU EQ initial configuration from path `{eq_conf0_path}`")
-    eq_conf0, target_u = load_conf_from_npz(eq_conf0_path)
-
-    print(f"Loading NVU EQ output from path `{params.nvu_eq_output}`")
-    nvu_eq_output = rp.tools.load_output(params.nvu_eq_output).get_h5()
-    print(f"Loading NVU PROD initial configuration from path `{params.nvu_eq_conf_output}`")
-    prod_conf0, _target_u = load_conf_from_npz(params.nvu_eq_conf_output)
-    print(f"Loading NVU PROD output from path `{params.nvu_output}`")
-    nvu_prod_output = rp.tools.load_output(params.nvu_output).get_h5()
-
-    conf_per_block = math.floor(512 / nvu_prod_output["block"].shape[0])
-    if rdf_new or not os.path.exists(params.other_prod_rdf):
-        other_prod_rdf = calculate_rdf(other_prod_output, conf_per_block)
-        np.savez(params.other_prod_rdf, **other_prod_rdf)
-    else:
-        other_prod_rdf = np.load(params.other_prod_rdf)
-
-    if rdf_new or not os.path.exists(params.nvu_prod_rdf):
-        prod_rdf = calculate_rdf(nvu_prod_output, conf_per_block)
-        np.savez(params.nvu_prod_rdf, **prod_rdf)
-    else:
-        prod_rdf = np.load(params.nvu_prod_rdf)
-
-    return Output(
-        target_u=target_u,
-        other_prod_output=other_prod_output,
-        eq_conf0=eq_conf0,
-        eq_output=nvu_eq_output,
-        prod_conf0=prod_conf0,
-        prod_output=nvu_prod_output,
-        prod_rdf=prod_rdf,
-        other_prod_rdf=other_prod_rdf,
-    )
 
 
 def get_delta_time_from_msd(msd: FloatArray, temperature: float, mass: float = 1) -> FloatArray:
@@ -145,13 +190,13 @@ def get_msd(output: Dict[str, Any]) -> FloatArray:
 def method(rdf_new: Set[str], rdf_all: bool) -> None:
     ## DISTRIBUTION OF DELTA TIMES
     ##   - Plot \Delta t over steps
-    output_n0 = get_output(LJ_N0, rdf_new=LJ_N0.name in rdf_new or rdf_all)
+    output_n0 = Output(LJ_N0, rdf_new=LJ_N0.name in rdf_new or rdf_all)
     n0 = output_n0.prod_output["block"].shape[3]
-    output_n1 = get_output(LJ_N1, rdf_new=LJ_N1.name in rdf_new or rdf_all)
+    output_n1 = Output(LJ_N1, rdf_new=LJ_N1.name in rdf_new or rdf_all)
     n1 = output_n1.prod_output["block"].shape[3]
-    output_n2 = get_output(LJ_N2, rdf_new=LJ_N2.name in rdf_new or rdf_all)
+    output_n2 = Output(LJ_N2, rdf_new=LJ_N2.name in rdf_new or rdf_all)
     n2 = output_n2.prod_output["block"].shape[3]
-    output_n3 = get_output(LJ_N3, rdf_new=LJ_N3.name in rdf_new or rdf_all)
+    output_n3 = Output(LJ_N3, rdf_new=LJ_N3.name in rdf_new or rdf_all)
     n3 = output_n3.prod_output["block"].shape[3]
     n0_dt = get_delta_time(output_n0.prod_output)
     n0_steps = get_steps(output_n0.prod_output)
@@ -220,6 +265,12 @@ def method(rdf_new: Set[str], rdf_all: bool) -> None:
     ax.hist(d_time_sq0, bins=30, density=True, facecolor="#eb3434", alpha=0.8, label=rf"$N = {n0}$; $\sigma = {scientific_notation(s_0, 2)}$")
     ax.hist(d_time_sq1, bins=30, density=True, facecolor="#34b1eb", alpha=0.8, label=rf"$N = {n1}$; $\sigma = {scientific_notation(s_1, 2)}$")
     ax.hist(d_time_sq2, bins=30, density=True, facecolor="black", alpha=0.6, label=rf"$N = {n2}$; $\sigma = {scientific_notation(s_2, 2)}$")
+    t = ax.annotate(
+        rf"temperature = ${LJ_N0.temperature}$""\n"
+        rf"$\rho$ = ${LJ_N0.rho}$", 
+        (0.08, 0.9), xycoords="axes fraction", verticalalignment="top")
+    t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
+
     ax.set_xlim(-1e-4, 1e-4)
     ax.set_xlabel(r"$\left(\Delta t\right)^2 - \langle \left(\Delta t\right)^2\rangle$")
     ax.set_ylabel(r"Probability")
@@ -285,7 +336,6 @@ def method(rdf_new: Set[str], rdf_all: bool) -> None:
     fig.savefig(FIG_PARABOLAS_AB)
     plt.close(fig)
 
-
     indices = np.argsort(np.abs(ys).max(axis=0))[::-1][[0, ys.shape[1]//4, ys.shape[1]*2//3, -1]]
     # print(indices, np.abs(ys).max(axis=0)[indices])
     fig = plt.figure(figsize=(8, 3))
@@ -318,45 +368,63 @@ def method(rdf_new: Set[str], rdf_all: bool) -> None:
     fig.savefig(FIG_PARABOLAS)
     plt.close(fig)
     
-    fig = plt.figure(figsize=(10, 8))
+
+def delta_time_vs_n() -> None:
+    fig = plt.figure(figsize=(8, 4))
     ax = fig.add_subplot()
-    for (i, params, output, n) in zip(
-        range(4), 
-        (LJ_N0, LJ_N1, LJ_N2, LJ_N3),
-        (output_n0, output_n1, output_n2, output_n3),
-        (n0, n1, n2, n3)
-    ):
-        msd = get_msd(output.prod_output)[:, 0]
-        dt = get_delta_time_from_msd(msd, params.temperature)
-        time = dt * 2 ** np.arange(len(msd))
+    delta_times = {}
+    for (i, params) in enumerate(T_PARAMS):
+        output = Output(params)
+        try:
+            n = output.prod_output["block"].shape[3]
+            if n not in delta_times:
+                delta_times[n] = []
+            msd = get_msd(output.prod_output)[:, 0]
+            dt = get_delta_time_from_msd(msd, params.temperature)
+            delta_times[n].append(dt)
+        except Exception as e:
+            # traceback.print_exc()
+            print("ERROR:", e)
+            pass
+    
+    # Confidence of 1 - alpha
+    alpha = .01
+    for n, dts in delta_times.items():
+        dt_mean = np.mean(dts)
+        dt_std = np.std(dts)
+        df = len(dts) - 1
+        t = stats.t.ppf(1 - alpha/2, df)
+        dt_delta = dt_std * t / np.sqrt(len(dts))
+        ax.plot(np.zeros(len(dts)) + n, dts, ".", linewidth=0, 
+                 markeredgewidth=1, markersize=10, markeredgecolor="black",
+                 alpha=.2)
+        # print(dt_mean, dt_std, dt_delta)
+        ax.errorbar(
+            n, dt_mean, yerr=dt_delta, fmt=".",
+            capsize=2, capthick=1.5, elinewidth=1,
+            color="black",
+            markersize=3, markeredgecolor="black",
+            alpha=.8, label=f"NVU RT $N={n}$"
+        )
 
-        other_msd = get_msd(output.other_prod_output)[:, 0]
-        other_time = params.dt * 2 ** np.arange(len(other_msd))
 
-        ln, = ax.loglog(other_time, other_msd, linewidth=1, color="black")
-        if i == 0:
-            ln.set_label("NVT")
-        ax.loglog(time, msd, marker='.', linewidth=0, 
-                  markeredgewidth=1, markersize=9, markeredgecolor="black",
-                  alpha=.9, label=f"NVU RT $N={n}$")
     t = ax.annotate(
-        rf"temperature = ${LJ_N0.temperature}$""\n"
-        rf"$\rho$ = ${LJ_N0.rho}$", 
-        (0.5, 0.15), xycoords="axes fraction")
+        rf"temperature = ${T1.temperature}$""\n"
+        rf"$\rho$ = ${T1.rho}$", 
+        (0.25, 0.15), xycoords="axes fraction")
     t.set_bbox(dict(facecolor='white', alpha=0.7, linewidth=0))
-    ax.set_ylabel(r"$\langle \Delta r^2 \rangle$")
-    ax.set_xlabel("$t$")
-    ax.legend()
+    ax.set_xlabel(r"$N$")
+    ax.set_ylabel("$\Delta t$")
     ax.grid(alpha=.3)
 
-    fig.savefig(FIG_MSD_N)
+    fig.savefig(FIG_DT_VS_N)
     plt.close(fig)
 
 
 def lennard_jones(rdf_new: Set[str], rdf_all: bool) -> None:
-    output_a = get_output(LJ_A, rdf_new=LJ_A.name in rdf_new or rdf_all)
-    output_b = get_output(LJ_B, rdf_new=LJ_B.name in rdf_new or rdf_all)
-    output_c = get_output(LJ_C, rdf_new=LJ_C.name in rdf_new or rdf_all)
+    output_a = Output(LJ_A, rdf_new=LJ_A.name in rdf_new or rdf_all)
+    output_b = Output(LJ_B, rdf_new=LJ_B.name in rdf_new or rdf_all)
+    output_c = Output(LJ_C, rdf_new=LJ_C.name in rdf_new or rdf_all)
 
     fsq, lap = rp.extract_scalars(output_a.prod_output, ["Fsq", "lapU"])
     steps = get_steps(output_a.prod_output)
@@ -449,7 +517,7 @@ def lennard_jones(rdf_new: Set[str], rdf_all: bool) -> None:
 
 def kob_andersen(rdf_new: Set[str], rdf_all: bool) -> None:
     outputs = [
-        get_output(params, rdf_new=params.name in rdf_new or rdf_all)
+        Output(params, rdf_new=params.name in rdf_new or rdf_all)
         for params in KA_PARAMS
     ]
 
@@ -537,8 +605,8 @@ def kob_andersen(rdf_new: Set[str], rdf_all: bool) -> None:
 
 
 def asd(rdf_new: Set[str], rdf_all: bool) -> None:
-    output = get_output(ASD, rdf_new=ASD.name in rdf_new or rdf_all)
-    output_no_scale = get_output(ASD_NO_SCALE, rdf_new=ASD.name in rdf_new or rdf_all)
+    output = Output(ASD, rdf_new=ASD.name in rdf_new or rdf_all)
+    output_no_scale = Output(ASD_NO_SCALE, rdf_new=ASD.name in rdf_new or rdf_all)
 
     fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot()
@@ -630,7 +698,7 @@ def asd(rdf_new: Set[str], rdf_all: bool) -> None:
 
 
 def no_inertia(rdf_new: Set[str], rdf_all: bool) -> None:
-    output = get_output(NI, rdf_new=NI.name in rdf_new or rdf_all)
+    output = Output(NI, rdf_new=NI.name in rdf_new or rdf_all)
 
     fig = plt.figure(figsize=(8, 3))
     gs = GridSpec(1, 2, wspace=0)
@@ -678,6 +746,7 @@ def main(
     run_ka: bool, 
     run_no_inertia: bool,
     run_asd: bool,
+    run_delta_time_vs_n: bool,
     rdf_new: Set[str],
     rdf_all: bool,
 ) -> None:
@@ -706,6 +775,11 @@ def main(
             asd(rdf_new=rdf_new, rdf_all=rdf_all)
         except Exception:
             traceback.print_exc()
+    if run_delta_time_vs_n:
+        try:
+            delta_time_vs_n()
+        except Exception:
+            traceback.print_exc()
 
 
 DATA_ROOT_FOLDER = "paper-output"
@@ -715,7 +789,7 @@ if not os.path.exists(FIG_ROOT_FOLDER):
 FIG_DT_OVER_STEPS = os.path.join(FIG_ROOT_FOLDER, "dt_over_steps.svg")
 FIG_DT_CORRECTION = os.path.join(FIG_ROOT_FOLDER, "dt_correction.svg")
 FIG_DT_HIST = os.path.join(FIG_ROOT_FOLDER, "dt_hist.svg")
-FIG_MSD_N = os.path.join(FIG_ROOT_FOLDER, "msd_n.svg")
+FIG_DT_VS_N = os.path.join(FIG_ROOT_FOLDER, "dt_vs_n.svg")
 FIG_PARABOLAS = os.path.join(FIG_ROOT_FOLDER, "parabolas.svg")
 FIG_PARABOLAS_AB = os.path.join(FIG_ROOT_FOLDER, "parabolas_ab.svg")
 FIG_PARABOLAS_RELATIVE_ERROR = os.path.join(FIG_ROOT_FOLDER, "parabolas_relative_error.svg")
@@ -906,6 +980,11 @@ for i in range(1, len(KA_TEMPERATURES)):
 
 dataclasses.replace(
     KA_PARAMS[6],
+    name=f"KA6_2",
+)
+
+dataclasses.replace(
+    KA_PARAMS[6],
     name=f"KA6_short",
     steps=2**30,
     steps_per_timeblock=2**25,
@@ -1011,11 +1090,11 @@ T1 = SimulationVsNVT(
     name="T1",
     description=
 """Test delta time and dynamics dependance on system size""",
-    root_folder=DATA_ROOT_FOLDER,
+    root_folder="paper-output/TestDT",
     rho=0.85,
-    steps=2**20,
-    steps_per_timeblock=2**15,
-    scalar_output=2**8,
+    steps=2**28,
+    steps_per_timeblock=2**23,
+    scalar_output=2**16,
     temperature=0.44,
     tau=0.2,
     dt=0.005,
@@ -1035,28 +1114,72 @@ T1 = SimulationVsNVT(
     nvu_params_save_path_u=True,
     nvu_params_raytracing_method="parabola",
 )
-dataclasses.replace(
+T2 = dataclasses.replace(
     T1,
     name="T2",
-    cells=[8, 8, 8]
+    cells=[8, 8, 8],
 )
-dataclasses.replace(
+T4 = dataclasses.replace(
     T1,
     name="T4",
-    cells=[16, 8, 8]
+    cells=[16, 8, 8],
 )
-dataclasses.replace(
+T6 = dataclasses.replace(
+    T1,
+    name="T6",
+    cells=[16, 12, 8],
+)
+T8 = dataclasses.replace(
     T1,
     name="T8",
-    cells=[16, 16, 8]
+    cells=[16, 16, 8],
+    steps=2**29,
+    steps_per_timeblock=2**24,
+    scalar_output=2**17,
 )
+
+# 53 pablo
+# 56 linnea
+# 59 krishna
+# 55 danqi
+# 57 francesco
+
+# T4|T4_1|T4_2|T4_3
+# T4_4|T4_5|T4_6|T4_7
+# T6
+# T6_1|T6_2|T6_3
+# T6_4|T6_5|T6_6|T6_7
+
+# T8  -> 
+# T8_1
+# T8_2
+# T8_3
+# T8_4
+# T8_5 -> 
+# T8_6 -> 
+# T8_7
+
+T_PARAMS = []
+for params in (T1, T2, T4, T6, T8, ):
+    T_PARAMS.append(params)
+    for i in range(1, 8):
+        T_PARAMS.append(dataclasses.replace(
+            params,
+            name=params.name+f"_{i}"
+        ))
 
 
 USE_BACKUP = {
     # "KA6": dataclasses.replace(KA_PARAMS[6], name="KA6.back2"),
-    "KA6": KNOWN_SIMULATIONS["KA6_short"]
+    "KA6": KNOWN_SIMULATIONS["KA6_short"],
 }
-
+# for params in T_PARAMS:
+#     USE_BACKUP[params.name] = dataclasses.replace(
+#         params, 
+#         root_folder=DATA_ROOT_FOLDER,
+#         hidden=True,
+#     )
+ 
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("-r", "--rdf", help="Recalculate rdf for simulations", nargs='*', default=[])
@@ -1066,6 +1189,7 @@ if __name__ == "__main__":
     parser.add_argument("-k", "--ka", help="Run Kob-Andersen", action="store_true")
     parser.add_argument("-n", "--no_inertia", help="Run No inertia", action="store_true")
     parser.add_argument("-s", "--asd", help="Run ASD", action="store_true")
+    parser.add_argument("-t", "--delta_time_vs_n", help="Run Delta time vs N", action="store_true")
     parser.add_argument("-d", "--device", help="Select NVIDIA device", type=int, default=None)
     if 'PBS_O_WORKDIR' in os.environ:
         flags = os.environ.get("flags", "")
@@ -1096,6 +1220,7 @@ if __name__ == "__main__":
         run_ka=args.ka, 
         run_no_inertia=args.no_inertia,
         run_asd=args.asd,
+        run_delta_time_vs_n=args.delta_time_vs_n, 
         rdf_new=set(args.rdf),
         rdf_all=args.rdf_all,
     )
