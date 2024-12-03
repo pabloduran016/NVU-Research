@@ -196,8 +196,8 @@ def method(rdf_new: Set[str], rdf_all: bool) -> None:
     n1 = output_n1.prod_output["block"].shape[3]
     output_n2 = Output(LJ_N2, rdf_new=LJ_N2.name in rdf_new or rdf_all)
     n2 = output_n2.prod_output["block"].shape[3]
-    output_n3 = Output(LJ_N3, rdf_new=LJ_N3.name in rdf_new or rdf_all)
-    n3 = output_n3.prod_output["block"].shape[3]
+    # output_n3 = Output(LJ_N3, rdf_new=LJ_N3.name in rdf_new or rdf_all)
+    # n3 = output_n3.prod_output["block"].shape[3]
     n0_dt = get_delta_time(output_n0.prod_output)
     n0_steps = get_steps(output_n0.prod_output)
     n1_dt = get_delta_time(output_n1.prod_output)
@@ -533,16 +533,18 @@ def kob_andersen(rdf_new: Set[str], rdf_all: bool) -> None:
         distances = output.prod_rdf["distances"][::n]
         other_rdf = np.mean(output.other_prod_rdf["rdf"], axis=0)
         rdf = np.mean(output.prod_rdf["rdf"], axis=0)[::n]
-        ax.plot(output.other_prod_rdf["distances"], other_rdf, linewidth=1, color="black", label="NVT")
+        # ax.plot(output.other_prod_rdf["distances"], other_rdf, linewidth=1, color="black", label="NVT")
         for i in range(output.prod_rdf["rdf_ptype"].shape[1]):
             for j in range(output.prod_rdf["rdf_ptype"].shape[2]):
                 if j > i:
                     break
                 other_rdf_ij = np.mean(output.other_prod_rdf["rdf_ptype"][:, i, j, :], axis=0)
-                ax.plot(output.other_prod_rdf["distances"], other_rdf_ij, linewidth=1, color="black", alpha=.8)
-        ax.plot(distances, rdf, marker='.', linewidth=0, 
-                markeredgewidth=1, markersize=9, markeredgecolor="black",
-                color="red", alpha=.9, label="NVU RT")
+                ln, = ax.plot(output.other_prod_rdf["distances"], other_rdf_ij, linewidth=1, color="black", alpha=.8)
+                if i == j == 0:
+                    ln.set_label("NVT")
+        # ax.plot(distances, rdf, marker='.', linewidth=0, 
+        #         markeredgewidth=1, markersize=9, markeredgecolor="black",
+        #         color="red", alpha=.9, label="NVU RT")
         for i in range(output.prod_rdf["rdf_ptype"].shape[1]):
             for j in range(output.prod_rdf["rdf_ptype"].shape[2]):
                 if j > i:
@@ -610,29 +612,32 @@ def asd(rdf_new: Set[str], rdf_all: bool) -> None:
 
     fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot()
-    n = len(output.prod_rdf["distances"]) // 110
-    distances = output.prod_rdf["distances"][::n]
+    n = len(output.prod_rdf["distances"])
+    samples = np.concatenate([
+        np.arange(0, n//5, 1),
+        np.arange(n//5, n//3, n//150),
+        np.arange(n//3, n, n//100),
+    ])
+    distances = output.prod_rdf["distances"][samples]
     other_rdf = np.mean(output.other_prod_rdf["rdf"], axis=0)
-    rdf = np.mean(output.prod_rdf["rdf"], axis=0)[::n]
-    ax.plot(output.other_prod_rdf["distances"], other_rdf, linewidth=1, color="black", label="NVT")
+    rdf = np.mean(output.prod_rdf["rdf"], axis=0)[samples]
+    # ax.plot(output.other_prod_rdf["distances"], other_rdf, linewidth=1, color="black", label="NVT")
     for i in range(output.prod_rdf["rdf_ptype"].shape[1]):
         for j in range(output.prod_rdf["rdf_ptype"].shape[2]):
-            if j != i:
-                continue
             if j > i:
                 break
             other_rdf_ij = np.mean(output.other_prod_rdf["rdf_ptype"][:, i, j, :], axis=0)
-            ax.plot(output.other_prod_rdf["distances"], other_rdf_ij, linewidth=1, color="black", alpha=.8)
-    ax.plot(distances, rdf, marker='.', linewidth=0, 
-            markeredgewidth=1, markersize=9, markeredgecolor="black",
-            color="red", alpha=.9, label="NVU RT")
+            ln, = ax.plot(output.other_prod_rdf["distances"], other_rdf_ij, linewidth=1, color="black", alpha=.8)
+            if i == j == 0:
+                ln.set_label("NVT")
+    # ax.plot(distances, rdf, marker='.', linewidth=0, 
+    #         markeredgewidth=1, markersize=9, markeredgecolor="black",
+    #         color="red", alpha=.9, label="NVU RT")
     for i in range(output.prod_rdf["rdf_ptype"].shape[1]):
         for j in range(output.prod_rdf["rdf_ptype"].shape[2]):
-            if j != i:
-                continue
             if j > i:
                 break
-            rdf_ij = np.mean(output.prod_rdf["rdf_ptype"][:, i, j, :], axis=0)[::n]
+            rdf_ij = np.mean(output.prod_rdf["rdf_ptype"][:, i, j, :], axis=0)[samples]
             ax.plot(distances, rdf_ij, marker='.', linewidth=0, 
                     markeredgewidth=1, markersize=9, markeredgecolor="black",
                     alpha=.8, label=f"NVU RT {['A', 'B'][j]}-{['A', 'B'][i]}")
@@ -644,6 +649,7 @@ def asd(rdf_new: Set[str], rdf_all: bool) -> None:
     ax.legend()
     ax.set_xlabel("$r$")
     ax.set_ylabel("$g(r)$")
+    ax.set_xlim(0.3, 4)
     fig.savefig(FIG_ASD_RDF)
 
     fig = plt.figure(figsize=(8, 6))
@@ -810,9 +816,9 @@ LJ_N0 = SimulationVsNVT(
 """Single-component Lennard-Jones""",
     root_folder=DATA_ROOT_FOLDER,
     rho=0.85,
-    steps=2**20,
-    steps_per_timeblock=2**15,
-    scalar_output=2**8,
+    steps=2**23,
+    steps_per_timeblock=2**18,
+    scalar_output=2**11,
     temperature=1,
     tau=0.2,
     dt=0.005,
@@ -1053,9 +1059,9 @@ ASD = SimulationVsNVT(
     # steps=4,
     # steps_per_timeblock=2,
     # scalar_output=0,
-    steps=2**22,
-    steps_per_timeblock=2**16,
-    scalar_output=2**10,
+    steps=2**26,
+    steps_per_timeblock=2**21,
+    scalar_output=2**14,
 
     pair_potential_name="ASD",
     pair_potential_params=asd_parameters,
@@ -1138,35 +1144,25 @@ T8 = dataclasses.replace(
     scalar_output=2**17,
 )
 
-# 53 pablo
-# 56 linnea
-# 59 krishna
-# 55 danqi
-# 57 francesco
-
-# T4|T4_1|T4_2|T4_3
-# T4_4|T4_5|T4_6|T4_7
-# T6
-# T6_1|T6_2|T6_3
-# T6_4|T6_5|T6_6|T6_7
-
-# T8  -> 
-# T8_1
-# T8_2
-# T8_3
-# T8_4
-# T8_5 -> 
-# T8_6 -> 
-# T8_7
-
-T_PARAMS = []
+T_PARAMS_temp044 = []
 for params in (T1, T2, T4, T6, T8, ):
-    T_PARAMS.append(params)
+    T_PARAMS_temp044 .append(params)
     for i in range(1, 8):
-        T_PARAMS.append(dataclasses.replace(
+        T_PARAMS_temp044 .append(dataclasses.replace(
             params,
             name=params.name+f"_{i}"
         ))
+
+T_PARAMS_temp1 = []
+for params in T_PARAMS_temp044 :
+    T_PARAMS_temp1.append(dataclasses.replace(
+        params,
+        name=params.name+f"_0.44",
+        root_folder="paper-output/TestDT_T0.44",
+        steps=2**23,
+        steps_per_timeblock=2**18,
+        scalar_output=2**11,
+    ))
 
 
 USE_BACKUP = {
