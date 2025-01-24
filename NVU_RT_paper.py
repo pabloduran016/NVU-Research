@@ -25,12 +25,14 @@ import matplotlib.pyplot as plt
 import rumdpy as rp
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, Set, Tuple, Optional, Union
+from typing import Any, Dict, Set, Tuple, Optional, Union, List
 from tools import KNOWN_SIMULATIONS, SimulationParameters, SimulationVsNVE, SimulationVsNVT, calculate_rdf, \
     load_conf_from_npz
 import numpy as np
 import numpy.typing as npt
 from scipy import stats
+import h5py
+import contextlib
 
 
 plt.style.use("./science.mplstyle")
@@ -44,11 +46,8 @@ class Output:
     params: Union[SimulationVsNVT, SimulationVsNVE]
     rdf_new: bool = False
     _target_u: Optional[float] = None
-    _other_prod_output: Optional[Dict[str, Any]] = None
     _eq_conf0: Optional[rp.Configuration] = None
-    _eq_output: Optional[Dict[str, Any]] = None
     _prod_conf0: Optional[rp.Configuration] = None
-    _prod_output: Optional[Dict[str, Any]] = None
     _prod_rdf: Optional[Dict[str, Any]] = None
     _other_prod_rdf: Optional[Dict[str, Any]] = None
 
@@ -59,46 +58,37 @@ class Output:
         if type(self.params) not in (SimulationVsNVT, SimulationVsNVE):
             raise ValueError("Expected vs NVE or vs NVT")
 
+        self.nvu_prod_path = self.params.nvu_output
+        self.nvu_eq_path = self.params.nvu_eq_output
+        self.other_prod_path = self.params.nvt_output \
+            if type(self.params) == SimulationVsNVT else self.params.nve_output
+        with h5py.File(self.params.nvu_eq_output, "r") as eq_output:
+            u, = rp.extract_scalars(eq_output, ["U"])
+            if np.any(np.abs((u - self.target_u) / self.target_u) > 10*self.params.nvu_params_threshold):
+                print(f"WARNING: NVU EQ output for run `{self.params.name}` has probably failed: (u - u0) / u0 > threshold", file=sys.stderr)
+        with h5py.File(self.params.nvu_output, "r") as prod_output:
+            u, = rp.extract_scalars(prod_output, ["U"])
+            if np.any(np.abs((u - self.target_u) / self.target_u) > 10*self.params.nvu_params_threshold):
+                print(f"WARNING: NVU PROD output for run `{self.params.name}` has probably failed: (u - u0) / u0 > threshold", file=sys.stderr)
+
     @property
     def target_u(self) -> rp.Configuration:
         if self._target_u is not None:
             return self._target_u
         eq_conf0_path = self.params.nvt_conf_output \
-            if type(self.params) == SimulationVsNVT else self.params.nve_conf_output
+            if type(self.params) == SimulationVsNVT else self.params.nve_conf_output  # type: ignore
         _, self._target_u = load_conf_from_npz(eq_conf0_path)
         return self._target_u
-
-    @property
-    def other_prod_output(self) -> Dict[str, Any]:
-        if self._other_prod_output is not None:
-            return self._other_prod_output
-        other_output_path = self.params.nvt_output \
-            if type(self.params) == SimulationVsNVT else self.params.nve_output
-        kind = "NVT" if type(self.params) == SimulationVsNVT else "NVE"
-        # print(f"Loading {kind} production output from path `{other_output_path}`")
-        self._other_prod_output = rp.tools.load_output(other_output_path).get_h5()
-        return self._other_prod_output
 
     @property
     def eq_conf0(self) -> rp.Configuration:
         if self._eq_conf0 is not None:
             return self._eq_conf0
         eq_conf0_path = self.params.nvt_conf_output \
-            if type(self.params) == SimulationVsNVT else self.params.nve_conf_output
+            if type(self.params) == SimulationVsNVT else self.params.nve_conf_output  # type: ignore
         # print(f"Loading NVU EQ initial configuration from path `{eq_conf0_path}`")
         self._eq_conf0, _ = load_conf_from_npz(eq_conf0_path)
         return self._eq_conf0
-
-    @property
-    def eq_output(self) -> Dict[str, Any]:
-        if self._eq_output is not None:
-            return self._eq_output
-        # print(f"Loading NVU EQ output from path `{self.params.nvu_eq_output}`")
-        self._eq_output = rp.tools.load_output(self.params.nvu_eq_output).get_h5()
-        u, = rp.extract_scalars(self._eq_output, ["U"])
-        if np.any(np.abs((u - self.target_u) / self.target_u) > 10*self.params.nvu_params_threshold):
-            print(f"WARNING: NVU EQ output for run `{self.params.name}` has probably failed: (u - u0) / u0 > threshold", file=sys.stderr)
-        return self._eq_output  # type: ignore
 
     @property
     def prod_conf0(self) -> rp.Configuration:
@@ -109,24 +99,15 @@ class Output:
         return self._prod_conf0
 
     @property
-    def prod_output(self) -> Dict[str, Any]:
-        if self._prod_output is not None:
-            return self._prod_output
-        # print(f"Loading NVU PROD output from path `{self.params.nvu_output}`")
-        self._prod_output = rp.tools.load_output(self.params.nvu_output).get_h5()
-        u, = rp.extract_scalars(self._prod_output, ["U"])
-        if np.any(np.abs((u - self.target_u) / self.target_u) > 10*self.params.nvu_params_threshold):
-            print(f"WARNING: NVU PROD output for run `{self.params.name}` has probably failed: (u - u0) / u0 > threshold", file=sys.stderr)
-        return self._prod_output  # type: ignore
-
-    @property
     def prod_rdf(self) -> Dict[str, Any]:
         if self._prod_rdf is not None:
             return self._prod_rdf
         # print("Calculating NVU PROD rdf")
-        conf_per_block = math.floor(512 / self.prod_output["block"].shape[0])
+        with h5py.File(self.nvu_prod_path, "r") as prod_output:
+            conf_per_block = math.floor(512 / prod_output["block"].shape[0])
         if self.rdf_new or not os.path.exists(self.params.nvu_prod_rdf):
-            self._prod_rdf = calculate_rdf(self.prod_output, conf_per_block)
+            with h5py.File(self.nvu_prod_path, "r") as prod_output:
+                self._prod_rdf = calculate_rdf(prod_output, conf_per_block)
             np.savez(self.params.nvu_prod_rdf, **self.prod_rdf)
         else:
             self._prod_rdf = np.load(self.params.nvu_prod_rdf)
@@ -138,9 +119,11 @@ class Output:
             return self._other_prod_rdf
         kind = "NVT" if type(self.params) == SimulationVsNVT else "NVE"
         # print(f"Calculating {kind} PROD rdf")
-        conf_per_block = math.floor(512 / self.prod_output["block"].shape[0])
+        with h5py.File(self.other_prod_path, "r") as other_prod_output:
+            conf_per_block = math.floor(512 / other_prod_output["block"].shape[0])
         if self.rdf_new or not os.path.exists(self.params.other_prod_rdf):
-            self._other_prod_rdf = calculate_rdf(self.other_prod_output, conf_per_block)
+            with h5py.File(self.other_prod_path, "r") as other_prod_output:
+                self._other_prod_rdf = calculate_rdf(other_prod_output, conf_per_block)
             np.savez(self.params.other_prod_rdf, **self._other_prod_rdf)
         else:
             self._other_prod_rdf = np.load(self.params.other_prod_rdf)
@@ -154,60 +137,71 @@ def scientific_notation(v: Union[float, np.float32], n: int) -> str:
     return s
 
 
-def get_delta_time_from_msd(msd: FloatArray, temperature: float, mass: float = 1) -> FloatArray:
+def get_delta_time_from_msd(msd: FloatArray, temperature: float, mass: float = 1) -> np.floating[Any]:
     kb = 1
     beta = np.sqrt(mass * msd[0] / (3 * kb * temperature))
     return beta
 
 
-def get_delta_time(output: Dict[str, Any]) -> FloatArray:
-    dt0, cos_v_f, = rp.extract_scalars(output, ["dt", "cos_v_f", ], 
-        integrator_outputs=rp.integrators.NVU_RT.outputs)
+def get_delta_time(output_path: str) -> FloatArray:
+    with h5py.File(output_path, "r") as output:
+        dt0, cos_v_f, = rp.extract_scalars(output, ["dt", "cos_v_f", ], 
+            integrator_outputs=rp.integrators.NVU_RT.outputs)
     cos_v_f[cos_v_f > 1] = 1
     cos_v_f[cos_v_f < -1] = -1
     dt = dt0 * (np.pi / 2 - np.arccos(cos_v_f)) / cos_v_f
     return dt
 
 
-def get_steps(output: Dict[str, Any]) -> FloatArray:
-    nblocks, nscalar_per_block, _nscalars = output["scalars"].shape
-    steps = np.arange(nblocks * nscalar_per_block) * output.attrs["steps_between_output"]
+def get_steps(output_path: str) -> FloatArray:
+    with h5py.File(output_path, "r") as output:
+        nblocks, nscalar_per_block, _nscalars = output["scalars"].shape
+        steps = np.arange(nblocks * nscalar_per_block) * output.attrs["steps_between_output"]
     return steps
 
 
-def get_path_u(output: Dict[str, Any]) -> Tuple[FloatArray, FloatArray]:
-    nblocks, npaths_per_block, npoints, n = output["path_u"].shape
-    data = output["path_u"][:].reshape(nblocks * npaths_per_block, npoints, n)
+def get_path_u(output_path: str) -> Tuple[FloatArray, FloatArray]:
+    with h5py.File(output_path, "r") as output:
+        nblocks, npaths_per_block, npoints, n = output["path_u"].shape
+        data = output["path_u"][:].reshape(nblocks * npaths_per_block, npoints, n)
     xs = data[:, :, 0].T
     ys = data[:, :, 1].T
     return xs, ys
 
 
-def get_msd(output: Dict[str, Any]) -> FloatArray:
-    return rp.tools.calc_dynamics(output, first_block=0)["msd"]
+def get_msd(output_path: str) -> FloatArray:
+    with h5py.File(output_path, "r") as output:
+        return rp.tools.calc_dynamics(output, first_block=0)["msd"]
 
+def get_block_n(output_path: str) -> int:
+    with h5py.File(output_path, "r") as output:
+        return output["block"].shape[3]
+
+def extract_scalars(output_path: str, variables: List[str]):
+    with h5py.File(output_path, "r") as output:
+        return rp.extract_scalars(output, variables)
 
 def method(rdf_new: Set[str], rdf_all: bool) -> None:
     ## DISTRIBUTION OF DELTA TIMES
     ##   - Plot \Delta t over steps
     output_n0 = Output(LJ_N0, rdf_new=LJ_N0.name in rdf_new or rdf_all)
-    n0 = output_n0.prod_output["block"].shape[3]
+    n0 = get_block_n(output_n0.nvu_prod_path)
     output_n1 = Output(LJ_N1, rdf_new=LJ_N1.name in rdf_new or rdf_all)
-    n1 = output_n1.prod_output["block"].shape[3]
+    n1 = get_block_n(output_n1.nvu_prod_path)
     output_n2 = Output(LJ_N2, rdf_new=LJ_N2.name in rdf_new or rdf_all)
-    n2 = output_n2.prod_output["block"].shape[3]
+    n2 = get_block_n(output_n2.nvu_prod_path)
     # output_n3 = Output(LJ_N3, rdf_new=LJ_N3.name in rdf_new or rdf_all)
     # n3 = output_n3.prod_output["block"].shape[3]
-    n0_dt = get_delta_time(output_n0.prod_output)
-    n0_steps = get_steps(output_n0.prod_output)
-    n1_dt = get_delta_time(output_n1.prod_output)
-    n1_steps = get_steps(output_n1.prod_output)
-    n2_dt = get_delta_time(output_n2.prod_output)
-    n2_steps = get_steps(output_n2.prod_output)
+    n0_dt = get_delta_time(output_n0.nvu_prod_path)
+    n0_steps = get_steps(output_n0.nvu_prod_path)
+    n1_dt = get_delta_time(output_n1.nvu_prod_path)
+    n1_steps = get_steps(output_n1.nvu_prod_path)
+    n2_dt = get_delta_time(output_n2.nvu_prod_path)
+    n2_steps = get_steps(output_n2.nvu_prod_path)
 
-    n0_dt_raw, = rp.extract_scalars(output_n0.prod_output, ["dt"], integrator_outputs=rp.integrators.NVU_RT.outputs)
-    n1_dt_raw, = rp.extract_scalars(output_n1.prod_output, ["dt"], integrator_outputs=rp.integrators.NVU_RT.outputs)
-    n2_dt_raw, = rp.extract_scalars(output_n2.prod_output, ["dt"], integrator_outputs=rp.integrators.NVU_RT.outputs)
+    n0_dt_raw, = extract_scalars(output_n0.nvu_prod_path, ["dt"], integrator_outputs=rp.integrators.NVU_RT.outputs)
+    n1_dt_raw, = extract_scalars(output_n1.nvu_prod_path, ["dt"], integrator_outputs=rp.integrators.NVU_RT.outputs)
+    n2_dt_raw, = extract_scalars(output_n2.nvu_prod_path, ["dt"], integrator_outputs=rp.integrators.NVU_RT.outputs)
 
     fig = plt.figure(figsize=(10, 8))
     # fig.suptitle(r"Correction to $\Delta t$ to account for curvature fo the surface")
@@ -283,7 +277,7 @@ def method(rdf_new: Set[str], rdf_all: bool) -> None:
     ##   - Plot Data + Fit
     ##   - Plot Error
 
-    xs, ys = get_path_u(output_n1.prod_output)
+    xs, ys = get_path_u(output_n1.nvu_prod_path)
 
     u = np.arange(xs.shape[0])
     p = np.polyfit(u, ys, 2)
@@ -376,14 +370,14 @@ def delta_time_vs_n() -> None:
     ):
         fig = plt.figure(figsize=(8, 4))
         ax = fig.add_subplot()
-        delta_times = {}
+        delta_times: Dict[int, List[np.floating[Any]]] = {}
         for (i, params) in enumerate(t_params):
             output = Output(params)
             try:
-                n = output.prod_output["block"].shape[3]
+                n = get_block_n(output.nvu_prod_path)
                 if n not in delta_times:
                     delta_times[n] = []
-                msd = get_msd(output.prod_output)[:, 0]
+                msd = get_msd(output.nvu_prod_path)[:, 0]
                 dt = get_delta_time_from_msd(msd, params.temperature)
                 delta_times[n].append(dt)
             except Exception as e:
@@ -430,8 +424,8 @@ def lennard_jones(rdf_new: Set[str], rdf_all: bool) -> None:
     output_b = Output(LJ_B, rdf_new=LJ_B.name in rdf_new or rdf_all)
     output_c = Output(LJ_C, rdf_new=LJ_C.name in rdf_new or rdf_all)
 
-    fsq, lap = rp.extract_scalars(output_a.prod_output, ["Fsq", "lapU"])
-    steps = get_steps(output_a.prod_output)
+    fsq, lap = extract_scalars(output_a.nvu_prod_path, ["Fsq", "lapU"])
+    steps = get_steps(output_a.nvu_prod_path)
     t_conf = fsq / lap
     sig = np.std(t_conf)
     mu = np.mean(t_conf)
@@ -496,11 +490,11 @@ def lennard_jones(rdf_new: Set[str], rdf_all: bool) -> None:
         (ax_b, output_b, LJ_B),
         (ax_c, output_c, LJ_C)
     ):
-        msd = get_msd(output.prod_output)[:, 0]
+        msd = get_msd(output.nvu_prod_path)[:, 0]
         dt = get_delta_time_from_msd(msd, params.temperature)
         time = dt * 2 ** np.arange(len(msd))
 
-        other_msd = get_msd(output.other_prod_output)[:, 0]
+        other_msd = get_msd(output.other_prod_path)[:, 0]
         other_time = params.dt * 2 ** np.arange(len(other_msd))
 
         ax.loglog(other_time, other_msd, linewidth=1, color="black", label="NVT")
@@ -572,10 +566,10 @@ def kob_andersen(rdf_new: Set[str], rdf_all: bool) -> None:
     gs = GridSpec(2, 1, wspace=.2, hspace=.2)
     axs = [fig.add_subplot(gs[i]) for i in range(2)]
     for i, (output, params) in enumerate(zip(outputs, KA_PARAMS)):
-        msd = get_msd(output.prod_output)
+        msd = get_msd(output.nvu_prod_path)
         # ax = fig.add_subplot(gs[i])
         n_msd, n_ptype = msd.shape
-        other_msd = get_msd(output.other_prod_output)
+        other_msd = get_msd(output.other_prod_path)
         other_time = params.dt * 2 ** np.arange(other_msd.shape[0])
 
         for ax, j in zip(axs, range(n_ptype)):
@@ -658,8 +652,8 @@ def asd(rdf_new: Set[str], rdf_all: bool) -> None:
 
     fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot()
-    msd = get_msd(output_no_scale.prod_output)
-    other_msd = get_msd(output_no_scale.other_prod_output)
+    msd = get_msd(output_no_scale.nvu_prod_path)
+    other_msd = get_msd(output_no_scale.other_prod_path)
     other_time = ASD.dt * 2 ** np.arange(len(other_msd))
     n_msd, n_type = msd.shape
 
@@ -675,6 +669,7 @@ def asd(rdf_new: Set[str], rdf_all: bool) -> None:
         ax.loglog(other_time, other_msd[:, i], linewidth=1, color="black", label="NVT")
         ax.loglog(time, msd[:, i], marker='.', linewidth=0, markeredgewidth=1, markersize=9, markeredgecolor="black",
                   color=color, alpha=.9, label=f"NVU RT {['A', 'B'][i]}")
+
     ax.grid(alpha=.3)
     ax.legend()
     ax.set_ylabel(r"$\langle \Delta r^2 \rangle$")
@@ -683,13 +678,13 @@ def asd(rdf_new: Set[str], rdf_all: bool) -> None:
 
     fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot()
-    msd = get_msd(output.prod_output)
-    other_msd = get_msd(output.other_prod_output)
+    msd = get_msd(output.nvu_prod_path)
+    other_msd = get_msd(output.other_prod_path)
     other_time = ASD.dt * 2 ** np.arange(len(other_msd))
     n_msd, n_type = msd.shape
 
     for i in range(n_type):
-        mass: float = 1
+        mass = 1
         if ASD.pair_potential_name == "ASD" and i == 1:
             mass = ASD.pair_potential_params["b_mass"]  # type: ignore
         dt = get_delta_time_from_msd(msd[:, i], ASD.temperature, mass)
@@ -729,11 +724,11 @@ def no_inertia(rdf_new: Set[str], rdf_all: bool) -> None:
     ax.set_ylabel("$g(r)$")
 
     ax = fig.add_subplot(gs[1])
-    msd = get_msd(output.prod_output)[:, 0]
+    msd = get_msd(output.nvu_prod_path)[:, 0]
     dt = get_delta_time_from_msd(msd, NI.temperature)
     time = dt * 2 ** np.arange(len(msd))
 
-    other_msd = get_msd(output.other_prod_output)[:, 0]
+    other_msd = get_msd(output.other_prod_path)[:, 0]
     other_time = NI.dt * 2 ** np.arange(len(other_msd))
 
     ax.loglog(other_time, other_msd, linewidth=1, color="black", label="NVT")
@@ -816,14 +811,14 @@ FIG_NO_INERTIA = os.path.join(FIG_ROOT_FOLDER, "no_inertia.svg")
 
 
 LJ_N0 = SimulationVsNVT(
-    name="LJ_N0",
+    name="LJ_N0-parabola",
     description=
 """Single-component Lennard-Jones""",
     root_folder=DATA_ROOT_FOLDER,
     rho=0.85,
-    steps=2**23,
-    steps_per_timeblock=2**18,
-    scalar_output=2**11,
+    steps=2**30,
+    steps_per_timeblock=2**25,
+    scalar_output=2**18,
     temperature=1,
     tau=0.2,
     dt=0.005,
@@ -835,8 +830,8 @@ LJ_N0 = SimulationVsNVT(
     nvu_params_threshold=1e-6,
     nvu_params_eps=1e-7,
     nvu_params_max_steps=20,
-    nvu_params_max_initial_step_corrections=20,
-    nvu_params_initial_step=0.5/0.85**(1/3),
+    nvu_params_max_initial_step_corrections=40,
+    nvu_params_initial_step=1/0.85**(1/3),
     nvu_params_initial_step_if_high=1,
     nvu_params_step=1,
     nvu_params_mode="reflection",
@@ -846,36 +841,67 @@ LJ_N0 = SimulationVsNVT(
 
 LJ_N1 = dataclasses.replace(
     LJ_N0,
-    name="LJ_N1",
+    name="LJ_N1-parabola",
     cells=[8, 8, 8],
+    steps=2**30,
+    steps_per_timeblock=2**25,
+    scalar_output=2**18,
 )
 
 LJ_N2 = dataclasses.replace(
     LJ_N0,
-    name="LJ_N2",
+    name="LJ_N2-parabola",
     cells=[8, 16, 16],
+    steps=2**31,
+    steps_per_timeblock=2**26,
+    scalar_output=2**19,
 )
-LJ_N3 = dataclasses.replace(
+
+LJ_N0 = dataclasses.replace(
     LJ_N0,
-    name="LJ_N3",
-    cells=[16, 16, 16],
+    name="LJ_N0-newton",
+    steps=2**30,
+    steps_per_timeblock=2**25,
+    scalar_output=2**18,
+    nvu_params_raytracing_method="parabola-newton",
+)
+LJ_N1 = dataclasses.replace(
+    LJ_N1,
+    name="LJ_N1-newton",
+    steps=2**30,
+    steps_per_timeblock=2**25,
+    scalar_output=2**18,
+    nvu_params_raytracing_method="parabola-newton",
+)
+LJ_N2 = dataclasses.replace(
+    LJ_N2,
+    name="LJ_N2-newton",
+    steps=2**30,
+    steps_per_timeblock=2**25,
+    scalar_output=2**18,
+    nvu_params_raytracing_method="parabola-newton",
 )
 # From this amount of particles on, needs gridsync, which is not implemented
-LJ_N4 = dataclasses.replace(
-    LJ_N0,
-    name="LJ_N4",
-    cells=[16, 16, 32],
-)
-LJ_N5 = dataclasses.replace(
-    LJ_N0,
-    name="LJ_N5",
-    cells=[16, 32, 32],
-)
-LJ_N6 = dataclasses.replace(
-    LJ_N0,
-    name="LJ_N6",
-    cells=[32, 32, 32],
-)
+# LJ_N3 = dataclasses.replace(
+#     LJ_N0,
+#     name="LJ_N3",
+#     cells=[16, 16, 16],
+# )
+# LJ_N4 = dataclasses.replace(
+#     LJ_N0,
+#     name="LJ_N4",
+#     cells=[16, 16, 32],
+# )
+# LJ_N5 = dataclasses.replace(
+#     LJ_N0,
+#     name="LJ_N5",
+#     cells=[16, 32, 32],
+# )
+# LJ_N6 = dataclasses.replace(
+#     LJ_N0,
+#     name="LJ_N6",
+#     cells=[32, 32, 32],
+# )
 
 
 
@@ -967,12 +993,16 @@ KA_TEMPERATURES = [2.0, 0.80, 0.60, 0.50, 0.44, 0.42, 0.405]
 for i in range(1, len(KA_TEMPERATURES)):
     if i <= 3:
         order = 25
+        steps_per_timeblock = 2**(order - 5)
     elif i == 4:
         order = 30
+        steps_per_timeblock = 2**(order - 5)
     elif i == 5:
         order = 31
+        steps_per_timeblock = 2**(order - 5)
     else:
         order = 34
+        steps_per_timeblock = 2**(order - 8)
     p = dataclasses.replace(
         KA0,
         name=f"KA{i}",
@@ -984,7 +1014,7 @@ for i in range(1, len(KA_TEMPERATURES)):
             x1=KA0.steps * KA0.dt * (1 / 4)),
         initial_conf=KA_PARAMS[i-1].nvt_conf_output,
         steps=2**order,
-        steps_per_timeblock=2**(order - 5),
+        steps_per_timeblock=steps_per_timeblock,
         scalar_output=2**(order - 12),
     )
     KA_PARAMS.append(p)
@@ -1064,9 +1094,9 @@ ASD = SimulationVsNVT(
     # steps=4,
     # steps_per_timeblock=2,
     # scalar_output=0,
-    steps=2**26,
-    steps_per_timeblock=2**21,
-    scalar_output=2**14,
+    steps=2**30,
+    steps_per_timeblock=2**25,
+    scalar_output=2**18,
 
     pair_potential_name="ASD",
     pair_potential_params=asd_parameters,
@@ -1086,15 +1116,15 @@ ASD = SimulationVsNVT(
     nvu_params_mode="reflection-mass_scaling",
 )
 ASD.temperature_eq = rp.make_function_ramp(  # type: ignore
-    value0=10.000, x0=ASD.dt * ASD.steps * (1 / 8),
-    value1=ASD.temperature, x1=ASD.dt * ASD.steps * (1 / 4))
+    value0=10.000, x0=ASD.dt * 2**13,
+    value1=ASD.temperature, x1=ASD.dt * 2**14)
 
 ASD_NO_SCALE = dataclasses.replace(
     ASD, name="NVT_ASD_noscaling",
     nvu_params_mode="reflection",
     temperature_eq = rp.make_function_ramp(  # type: ignore
-        value0=10.000, x0=ASD.dt * ASD.steps * (1 / 8),
-        value1=ASD.temperature, x1=ASD.dt * ASD.steps * (1 / 4))
+        value0=10.000, x0=ASD.dt * 2**13,
+        value1=ASD.temperature, x1=ASD.dt * 2**14)
 )
 
 T1 = SimulationVsNVT(
@@ -1195,6 +1225,8 @@ if __name__ == "__main__":
     parser.add_argument("-s", "--asd", help="Run ASD", action="store_true")
     parser.add_argument("-t", "--delta_time_vs_n", help="Run Delta time vs N", action="store_true")
     parser.add_argument("-d", "--device", help="Select NVIDIA device", type=int, default=None)
+
+    raw_args: Optional[List[str]]
     if 'PBS_O_WORKDIR' in os.environ:
         flags = os.environ.get("flags", "")
         raw_args = flags.split()

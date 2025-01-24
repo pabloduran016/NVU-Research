@@ -1,3 +1,4 @@
+import h5py
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.gridspec import GridSpec
 import matplotlib.pyplot as plt
@@ -32,7 +33,7 @@ __all__ = [
 def run_NVTorNVE(params: "SimulationParameters") -> None:
     temp_eq = params.temperature_eq if params.temperature_eq is not None else params.temperature
     if params.initial_conf is None:
-        conf = rp.Configuration(D=3)
+        conf = rp.Configuration(D=3, compute_flags={'Fsq': True, 'lapU': True})
         conf.make_lattice(rp.unit_cells.FCC, cells=params.cells, rho=params.rho)
         pair_p, ptype, mass = params.get_pair_potential(conf)
         conf.ptype = ptype
@@ -43,9 +44,10 @@ def run_NVTorNVE(params: "SimulationParameters") -> None:
             temp0 = temp_eq(0)
         else:
             temp0 = temp_eq
-        conf.randomize_velocities(T=temp0)
+        conf.randomize_velocities(temperature=temp0)
     else:
         conf, _  = load_conf_from_npz(params.initial_conf)
+
         pair_p, _ptype, _mass = params.get_pair_potential(conf)
         
     if type(params) == SimulationVsNVT:
@@ -70,7 +72,7 @@ def run_NVTorNVE(params: "SimulationParameters") -> None:
         conf_output="none",
         scalar_output="none",  # type: ignore
         verbose=True)
-    for block in sim.timeblocks():
+    for block in sim.run_timeblocks():
         print("block=", block, sim.status(per_particle=True))
     print(sim.summary())
     print(f"========== {kind} PROD ==========")
@@ -81,14 +83,15 @@ def run_NVTorNVE(params: "SimulationParameters") -> None:
         scalar_output=params.scalar_output,
         storage=prod_output, 
         verbose=True)
-    for block in sim.timeblocks():
+    for block in sim.run_timeblocks():
         print("block=", block, sim.status(per_particle=True))
     print(sim.summary())
 
-    other_output_prod = rp.tools.load_output(prod_output).get_h5()
-    positions = other_output_prod["block"][:, :, 0, :, :]
-    _, _, _n, d = positions.shape
-    u, = rp.extract_scalars(other_output_prod, ["U"], first_block=0, D=d)
+    with h5py.File(prod_output) as other_output_prod:
+        positions = other_output_prod["block"][:, :, 0, :, :]
+        _, _, _n, d = positions.shape
+        u, = rp.extract_scalars(other_output_prod, ["U"], first_block=0, D=d)
+
     target_u = np.mean(u[len(u)*3//4:])
 
     sim = rp.Simulation(
@@ -98,10 +101,10 @@ def run_NVTorNVE(params: "SimulationParameters") -> None:
         conf_output="none",
         scalar_output="none",  # type: ignore
         verbose=True)
-    for block in sim.timeblocks():
+    for block in sim.run_timeblocks():
         ev = rp.Evaluator(conf, pair_p)
         ev.evaluate()
-        conf_u = np.sum(conf["u"])
+        conf_u = np.sum(conf["U"])
         if conf_u <= target_u:
             save_conf_to_npz(conf_output, conf, target_u)
             return
@@ -125,7 +128,6 @@ def run_NVU_RT(params: "SimulationParameters", do_nvu_eq: bool) -> None:
         return
 
     # target_u = np.mean(u)
-    other_prod_output = rp.tools.load_output(prod_output).get_h5()
     conf, target_u = load_conf_from_npz(conf_output)
     integrator = rp.integrators.NVU_RT(
         target_u=target_u,
@@ -153,8 +155,9 @@ def run_NVU_RT(params: "SimulationParameters", do_nvu_eq: bool) -> None:
             storage=params.nvu_eq_output,
             scalar_output=params.scalar_output,
             verbose=True,
+            compute_flags={'Fsq': True, 'lapU': True},
         )
-        for block in sim.timeblocks():
+        for block in sim.run_timeblocks():
             print("block=", block, sim.status(per_particle=True))
         print(sim.summary())
         save_conf_to_npz(params.nvu_eq_conf_output, conf, target_u)
@@ -168,8 +171,9 @@ def run_NVU_RT(params: "SimulationParameters", do_nvu_eq: bool) -> None:
         storage=params.nvu_output, 
         scalar_output=params.scalar_output,
         verbose=True,
+        compute_flags={'Fsq': True, 'lapU': True},
     )
-    for block in sim.timeblocks():
+    for block in sim.run_timeblocks():
         print("block=", block, sim.status(per_particle=True))
     print(sim.summary())
 
@@ -183,7 +187,7 @@ def save_conf_to_npz(path: str, conf: rp.Configuration, target_u: float) -> None
 def load_conf_from_npz(path: str) -> Tuple[rp.Configuration, float]:
     conf_data = np.load(path)
     n, d = conf_data["r"].shape
-    conf = rp.Configuration(N=n, D=d)
+    conf = rp.Configuration(N=n, D=d, compute_flags={'Fsq': True, 'lapU': True})
     conf["r"] = conf_data["r"]
     conf["m"] = conf_data.get("m", 1)
     conf["v"] = conf_data["v"]
@@ -193,7 +197,7 @@ def load_conf_from_npz(path: str) -> Tuple[rp.Configuration, float]:
 
 
 
-KNOWN_SIMULATIONS: Dict[str, "SimulationParameters"] = {}
+KNOWN_SIMULATIONS: Dict[str, Union["SimulationVsNVT", "SimulationVsNVE"]] = {}
 
 @dataclass(kw_only=True)
 class SimulationParameters:
@@ -256,6 +260,7 @@ class SimulationParameters:
         self.create_info_file()
 
     def get_pair_potential_params(self) -> Tuple[Union[float, FloatArray], ...]:
+        params: Tuple[str, ...]
         if self.pair_potential_name == "LJ":
             params = ("sig", "eps", "cut")
             if set(self.pair_potential_params.keys()) != set(params):
@@ -369,6 +374,7 @@ class SimulationParameters:
     def info(self) -> str:
         info = f"{self.name}\n\n{self.description}\n\n"
         info += f"{self.pair_potential_name}\n"
+        val: Union[npt.NDArray[np.float32], float]
         for name, val in self.pair_potential_params.items():
             info += f"{name} = {val}\n"
         info += f"\n"
@@ -451,11 +457,11 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     else:
         raise ValueError("Expected vs NVE or vs NVT")
     
-    other_prod_output = rp.tools.load_output(other_prod_output_path).get_h5()
+    with h5py.File(other_prod_output_path, "r") as other_prod_output:
+        nblocks, _, _, n, d = other_prod_output["block"].shape
+        other_u, other_k, = rp.extract_scalars(other_prod_output, ["U", "K"], first_block=0, D=d)
+        other_step = np.arange(len(other_u)) * other_prod_output.attrs["steps_between_output"]
 
-    _, _, _, n, d = other_prod_output["block"].shape
-
-    other_u, other_k, = rp.extract_scalars(other_prod_output, ["U", "K"], first_block=0, D=d)
     nvu_eq_conf, target_u = load_conf_from_npz(params.nvu_eq_conf_output)
     other_du_rel = (other_u - target_u) / abs(target_u)
 
@@ -464,7 +470,6 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax0 = fig.add_subplot(2, 1, 1)
     ax1 = fig.add_subplot(2, 1, 2)
 
-    other_step = np.arange(len(other_u)) * other_prod_output.attrs["steps_between_output"]
     ax0.plot(other_step, other_du_rel, linewidth=1, alpha=.8, color="black")
     ax0.set_xlabel("steps")
     ax0.set_ylabel(r"$\frac{U - U_0}{|U_0|}$")
@@ -486,14 +491,12 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
         print("WARNING: NVU PROD output not found", file=sys.stderr)
         return
 
-    nvu_prod_output = rp.tools.load_output(params.nvu_output).get_h5()
-    nvu_eq_output = rp.tools.load_output(params.nvu_eq_output).get_h5()
-    nblocks, _, _, _, _ = nvu_prod_output["block"].shape
+    with h5py.File(params.nvu_output, "r") as nvu_prod_output:
+        nblocks, _, _, _, _ = nvu_prod_output["block"].shape
+        nvu_prod_u, prod_dt, prod_its, prod_fsq, prod_lap, prod_cos_v_f, prod_time, = \
+                rp.extract_scalars(nvu_prod_output, ["U", "dt", "its", "Fsq", "lapU", "cos_v_f", "time", ],)
+        prod_step = np.arange(len(nvu_prod_u)) * nvu_prod_output.attrs["steps_between_output"]
 
-    nvu_prod_u, prod_dt, prod_its, prod_fsq, prod_lap, prod_cos_v_f, prod_time, = \
-        rp.extract_scalars(nvu_prod_output, ["U", "dt", "its", "Fsq", "lapU", "cos_v_f", "time", ], 
-                           integrator_outputs=rp.integrators.NVU_RT.outputs)
-    prod_step = np.arange(len(nvu_prod_u)) * nvu_prod_output.attrs["steps_between_output"]
     prod_cos_v_f[prod_cos_v_f > 1] = 1
     prod_cos_v_f[prod_cos_v_f < -1] = -1
     prod_correction = (np.pi / 2 - np.arccos(prod_cos_v_f)) / prod_cos_v_f
@@ -512,6 +515,7 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax1.set_xlabel(r"$\frac{U - U_0}{|U_0|}$")
     ax1.grid()
 
+    conf_per_block = math.floor(512 / nblocks)
     rdf_ptype = None
     if params.pair_potential_name in ("LJ-eps_poly", "LJ-sig_poly"):
         ntypes: int = params.pair_potential_params["ntypes"]  # type: ignore
@@ -535,9 +539,10 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
             old_ptype[old_ptype == i] = new_ptype
         rdf_ptype = old_ptype
 
-    conf_per_block = math.floor(512 / nblocks)
-    other_rdf = calculate_rdf(other_prod_output, conf_per_block, ptype=rdf_ptype)
-    nvu_rdf = calculate_rdf(nvu_prod_output, conf_per_block, ptype=rdf_ptype)
+    with h5py.File(params.nvu_output, "r") as nvu_prod_output:
+        nvu_rdf = calculate_rdf(nvu_prod_output, conf_per_block, ptype=rdf_ptype)
+    with h5py.File(other_prod_output_path, "r") as other_prod_output:
+        other_rdf = calculate_rdf(other_prod_output, conf_per_block, ptype=rdf_ptype)
 
     fig = plt.figure(figsize=(10, 8))
     fig.suptitle("$g(r)$")
@@ -567,18 +572,21 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax.set_xlabel(r"$r$")
     ax.set_ylabel(r"$g(r)$")
 
-    nvu_msd = rp.tools.calc_dynamics(nvu_prod_output, first_block=0)["msd"]
-    other_msd = rp.tools.calc_dynamics(other_prod_output, first_block=0)["msd"]
+    with h5py.File(other_prod_output_path, "r") as other_prod_output:
+        other_msd = rp.tools.calc_dynamics(other_prod_output, first_block=0)["msd"]
+        other_time = other_prod_output.attrs['dt'] * 2 ** np.arange(other_msd.shape[0])
+    with h5py.File(params.nvu_output, "r") as nvu_prod_output:
+        nvu_msd = rp.tools.calc_dynamics(nvu_prod_output, first_block=0)["msd"]
+
     if params.pair_potential_name in ("LJ-eps_poly", "LJ-sig_poly"):
-        nvu_msd = rp.tools.calc_dynamics(nvu_prod_output, first_block=0)["msd"].mean(axis=1)[:, np.newaxis]
-        other_msd = rp.tools.calc_dynamics(other_prod_output, first_block=0)["msd"].mean(axis=1)[:, np.newaxis]
+        nvu_msd = nvu_msd.mean(axis=1)[:, np.newaxis]
+        other_msd = other_msd.mean(axis=1)[:, np.newaxis]
 
     n_msd, n_ptype = nvu_msd.shape
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot()
     fig.suptitle("MSD")
     for i in range(n_ptype):
-        other_time = other_prod_output.attrs['dt'] * 2 ** np.arange(n_msd)
         nvu_time = np.mean(prod_dt) * 2 ** np.arange(n_msd)
 
         ax.loglog(other_time, other_msd[:, i], linewidth=1, color="black", alpha=.8, label=f"{kind} {i}")
@@ -593,10 +601,9 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     fig.suptitle("MSD using ballistic regime to calculate time")
     ax = fig.add_subplot()
     for i in range(n_ptype):
-        other_time = other_prod_output.attrs['dt'] * 2 ** np.arange(n_msd)
         ax.loglog(other_time, other_msd[:, i], linewidth=1, color="black", alpha=.8, label=f"{kind} {i}")
         kb = 1
-        mass = 1
+        mass: Union[npt.NDArray[np.float32], float] = 1
         if params.pair_potential_name == "ASD" and i == 1:
             mass = params.pair_potential_params["b_mass"]
         prod_beta = np.sqrt(mass * nvu_msd[0, i] / (3 * kb * params.temperature))
@@ -606,9 +613,6 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax.legend()
     ax.set_xlabel(r"$t$")
     ax.set_ylabel(r"$MSD$")
-
-    nblocks, nconfs, _, _, _ = nvu_prod_output["block"].shape
-    step_conf = np.concatenate([params.steps_per_timeblock * i + 2 ** np.concatenate([[0], np.arange(nconfs-1)]) for i in range(nblocks)])
 
     fig = plt.figure(figsize=(10, 8))
     fig.suptitle("Time NVU")
@@ -753,12 +757,13 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     # ax.set_ylabel(r"$\kappa$")
     # ax.grid()
 
-    nvu_eq_u, eq_dt, eq_its, eq_fsq, eq_lap, eq_cos_v_f, eq_time = \
-        rp.extract_scalars(nvu_eq_output, ["U", "dt", "its", "Fsq", "lapU", "cos_v_f", "time", ], 
-                           integrator_outputs=rp.integrators.NVU_RT.outputs, first_block=1)
+    with h5py.File(params.nvu_eq_output, "r") as nvu_eq_output:
+        nvu_eq_u, eq_dt, eq_its, eq_fsq, eq_lap, eq_cos_v_f, eq_time = \
+            rp.extract_scalars(nvu_eq_output, ["U", "dt", "its", "Fsq", "lapU", "cos_v_f", "time", ], )
+        eq_step = np.arange(len(nvu_eq_u)) * nvu_eq_output.attrs["steps_between_output"]
+
     eq_cos_v_f[eq_cos_v_f > 1] = 1
     eq_cos_v_f[eq_cos_v_f < 1] = -1
-    eq_step = np.arange(len(nvu_eq_u)) * nvu_eq_output.attrs["steps_between_output"]
 
     nvu_eq_du_rel = (nvu_eq_u - target_u) / abs(target_u)
     fig = plt.figure(figsize=(10, 10))
@@ -773,8 +778,6 @@ def plot_nvu_vs_figures(params: SimulationParameters) -> None:
     ax1.set_xlabel(r"$\frac{U - U_0}{|U_0|}$")
     ax1.grid()
 
-    nblocks, nconfs, _, _, _ = nvu_eq_output["block"][1:, :, :, :, :].shape
-    step_conf = np.concatenate([params.steps_per_timeblock * i + 2 ** np.concatenate([[0], np.arange(nconfs-1)]) for i in range(nblocks)])
     fig = plt.figure(figsize=(10, 8))
     fig.suptitle("Time NVU EQ")
     ax = fig.add_subplot()
@@ -901,7 +904,7 @@ def get_cov(x: npt.NDArray[np.float32], y: npt.NDArray[np.float32]) -> npt.NDArr
     return c
 
 
-def calculate_rdf(output: dict[str, Any], conf_per_block: int, ptype: Optional[IntArray] = None, ) -> dict[str, Any]:
+def calculate_rdf(output: h5py.File, conf_per_block: int, ptype: Optional[IntArray] = None, ) -> dict[str, Any]:
     _, nconf, _, n, d = output["block"].shape
     positions = output["block"][:, :, 0, :, :]
     conf = rp.Configuration(D=d, N=n)
